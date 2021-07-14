@@ -400,15 +400,16 @@ var
   itemNative  : TOPCItem;
   value       : Variant;
   quality     : word;
+  ts          : TDateTime;
   itm         : JObject;
 begin
   groupNative := getGroupByJavaCode(PEnv, group);
   itemNative  := groupNative.getItemByJavaCode(PEnv, item);
-  HR := ReadOPCGroupItemValue(groupNative.GroupIf, itemNative.ItemHandle, value, quality);
+  HR := ReadOPCGroupItemValue(groupNative.GroupIf, itemNative.ItemHandle, value, quality, ts);
 
   if Succeeded(HR)
   then begin
-    itemNative.setTimeStamp(Now); // set actual timeStamp (System time)
+    itemNative.setTimeStamp(ts);
     itemNative.setItemValue(value);
     itemNative.setItemQuality(quality);
     itm := itemNative.clone(PEnv, item);

@@ -73,7 +73,7 @@ public class PropertyLoader {
     Properties props = null;
     InputStream in = null;
     try {
-      ClassLoader cl = ClassLoader.getSystemClassLoader();
+      ClassLoader cl = PropertyLoader.class.getClassLoader();
       String name = propsName.replace('.', '/').concat(".properties");
 
       in = cl.getResourceAsStream(name);

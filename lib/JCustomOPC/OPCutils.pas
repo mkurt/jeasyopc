@@ -41,7 +41,7 @@ function GroupRemoveItem(GroupIf: IOPCItemMgt; ServerHandle: OPCHANDLE): HResult
 
 // synch read item value
 function ReadOPCGroupItemValue(GroupIf: IUnknown; ItemServerHandle: OPCHANDLE;
-           var ItemValue: Variant; var ItemQuality: Word): HResult;
+           var ItemValue: Variant; var ItemQuality: Word; var ItemTimeStamp: TDateTime): HResult;
 
 // synch write item value
 function WriteOPCGroupItemValue(GroupIf: IUnknown; ItemServerHandle: OPCHANDLE;
@@ -82,6 +82,7 @@ function ChangePosTo(Browse: IOPCBrowseServerAddressSpace; Path: string): HRESUL
 function GetGroupActive(GroupIf: IUnknown; var Active: boolean): HRESULT;
 function GetGroupInfo(GroupIf: IUnknown; var GInfo : string): HRESULT;
 function DataType(Dtype: TVarType): string;
+function FileTimeToDateTime(FileTime: TFileTime): TDateTime;
 
 implementation
 
@@ -267,7 +268,7 @@ end;
 
 // wrapper for IOPCSyncIO.Read (single item only)
 function ReadOPCGroupItemValue(GroupIf: IUnknown; ItemServerHandle: OPCHANDLE;
-          var ItemValue: Variant; var ItemQuality: Word): HResult;
+          var ItemValue: Variant; var ItemQuality: Word; var ItemTimeStamp: TDateTime): HResult;
 var
   SyncIOIf: IOPCSyncIO;
   Errors: PResultList;
@@ -294,6 +295,7 @@ begin
           ItemValue := VT_ERROR;
         end;
         ItemQuality := ItemValues[0].wQuality;
+        ItemTimeStamp := FileTimeToDateTime(ItemValues[0].ftTimeStamp);
         VariantClear(ItemValues[0].vDataValue);
         CoTaskMemFree(ItemValues);
       except
@@ -364,7 +366,7 @@ begin
         then begin
           TOPCItem(items[i]).setItemValue(ItemValues[i].vDataValue);
           TOPCItem(items[i]).setItemQuality(ItemValues[i].wQuality);
-          TOPCItem(items[i]).setTimeStamp(Now); // set actual timeStamp (System time)
+          TOPCItem(items[i]).setTimeStamp(FileTimeToDateTime(ItemValues[i].ftTimeStamp));
         end // Error in communication (different from bad quality of item)
         else Result := Errors[i];
         // clear variant type
@@ -518,10 +520,49 @@ function DataType(Dtype: TVarType): string;
 begin
   case Dtype of
    varEmpty    : Result := 'Empty';
-   varNull     : Result := 'Null';   varSmallint : Result := 'Smallint';   varInteger  : Result := 'Integer';   varSingle   : Result := 'Single';   varDouble   : Result := 'Double';   varCurrency : Result := 'Currency';   varDate     : Result := 'Date';   varOleStr   : Result := 'OleStr';   varDispatch : Result := 'Dispatch';   varError    : Result := 'Error';   varBoolean  : Result := 'Boolean';   varVariant  : Result := 'Variant';   varUnknown  : Result := 'Unknown';   varShortInt : Result := 'Shortint';   varByte     : Result := 'Byte';   varWord     : Result := 'Word';   varLongWord : Result := 'Longword';   varInt64    : Result := 'Int64';   varStrArg   : Result := 'StrArg';   varString   : Result := 'String';   varAny      : Result := 'Any';   varTypeMask : Result := 'TypeMask';   varArray    : Result := 'Array';   varByRef    : Result := 'ByRef';
+   varNull     : Result := 'Null';
+   varSmallint : Result := 'Smallint';
+   varInteger  : Result := 'Integer';
+   varSingle   : Result := 'Single';
+   varDouble   : Result := 'Double';
+   varCurrency : Result := 'Currency';
+   varDate     : Result := 'Date';
+   varOleStr   : Result := 'OleStr';
+   varDispatch : Result := 'Dispatch';
+   varError    : Result := 'Error';
+   varBoolean  : Result := 'Boolean';
+   varVariant  : Result := 'Variant';
+   varUnknown  : Result := 'Unknown';
+   varShortInt : Result := 'Shortint';
+   varByte     : Result := 'Byte';
+   varWord     : Result := 'Word';
+   varLongWord : Result := 'Longword';
+   varInt64    : Result := 'Int64';
+   varStrArg   : Result := 'StrArg';
+   varString   : Result := 'String';
+   varAny      : Result := 'Any';
+   varTypeMask : Result := 'TypeMask';
+   varArray    : Result := 'Array';
+   varByRef    : Result := 'ByRef';
    else          Result := '???';
   end;
 end;
 
+function FileTimeToDateTime(FileTime: TFileTime): TDateTime;
+var
+  ModifiedTime: TFileTime;
+  SystemTime: TSystemTime;
+begin
+  Result := 0;
+  if (FileTime.dwLowDateTime = 0) and (FileTime.dwHighDateTime = 0) then
+    Exit;
+  try
+    FileTimeToLocalFileTime(FileTime, ModifiedTime);
+    FileTimeToSystemTime(ModifiedTime, SystemTime);
+    Result := SystemTimeToDateTime(SystemTime);
+  except
+    Result := Now;  // Something to return in case of error
+  end;
+end;
 
 end.

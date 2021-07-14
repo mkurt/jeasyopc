@@ -29,52 +29,57 @@ begin
    varEmpty: begin
      // not supported -> string
      msyntax := '(Ljava/lang/String;)V';
-     args[0].l := JVM.StringToJString(PAnsiChar(VarToStr(varin)));
+     args[0].l := JVM.StringToJString(PAnsiChar(AnsiString(VarToStr(varin))));
    end;
    varNull: begin
      // not supported -> string
      msyntax := '(Ljava/lang/String;)V';
-     args[0].l := JVM.StringToJString(PAnsiChar(VarToStr(varin)));
+     args[0].l := JVM.StringToJString(PAnsiChar(AnsiString(VarToStr(varin))));
    end;
    varSmallint: begin
      msyntax := '(S)V';
-     args[0].s := varin;   end;
+     args[0].s := varin;
+   end;
    varInteger: begin
      msyntax := '(I)V';
-     args[0].i := varin;   end;
+     args[0].i := varin;
+   end;
    varSingle: begin
      msyntax := '(F)V';
-     args[0].f := varin;   end;
+     args[0].f := varin;
+   end;
    varDouble: begin
     msyntax := '(D)V';
-    args[0].d := varin;   end;
+    args[0].d := varin;
+   end;
    varCurrency: begin
      // not supported -> string
      msyntax := '(Ljava/lang/String;)V';
-     args[0].l := JVM.StringToJString(PAnsiChar(VarToStr(varin)));
+     args[0].l := JVM.StringToJString(PAnsiChar(AnsiString(VarToStr(varin))));
    end;
    varDate: begin
      // not supported -> string
      msyntax := '(Ljava/lang/String;)V';
-     args[0].l := JVM.StringToJString(PAnsiChar(VarToStr(varin)));
+     args[0].l := JVM.StringToJString(PAnsiChar(AnsiString(VarToStr(varin))));
    end;
    varOleStr: begin
      msyntax := '(Ljava/lang/String;)V';
-     args[0].l := JVM.StringToJString(PAnsiChar(VarToStr(varin)));
+     args[0].l := JVM.StringToJString(PAnsiChar(AnsiString(VarToStr(varin))));
    end;
    varDispatch: begin
      // not supported -> string
      msyntax := '(Ljava/lang/String;)V';
-     args[0].l := JVM.StringToJString(PAnsiChar(VarToStr(varin)));
+     args[0].l := JVM.StringToJString(PAnsiChar(AnsiString(VarToStr(varin))));
    end;
    varError: begin
      // not supported -> string
      msyntax := '(Ljava/lang/String;)V';
-     args[0].l := JVM.StringToJString(PAnsiChar(VarToStr(varin)));
+     args[0].l := JVM.StringToJString(PAnsiChar(AnsiString(VarToStr(varin))));
    end;
    varBoolean: begin
      msyntax := '(Z)V';
-     args[0].z := varin;   end;
+     args[0].z := varin;
+   end;
    varVariant: begin
      msyntax := '(Ljavafish/clients/opc/variant/Variant;)V';
      args[0].l := variantCommit(PEnv, varin);
@@ -82,32 +87,36 @@ begin
    varUnknown: begin
      // not supported -> string
      msyntax := '(Ljava/lang/String;)V';
-     args[0].l := JVM.StringToJString(PAnsiChar(VarToStr(varin)));
+     args[0].l := JVM.StringToJString(PAnsiChar(AnsiString(VarToStr(varin))));
    end;
    varShortInt: begin
      msyntax := '(I)V';
-     args[0].i := varin;   end;
+     args[0].i := varin;
+   end;
    varByte: begin
      msyntax := '(B)V';
-     args[0].b := varin;   end;
+     args[0].b := varin;
+   end;
    varWord: begin
      msyntax := '(S)V';
-     args[0].s := varin;   end;
+     args[0].s := varin;
+   end;
    varLongWord: begin
-     msyntax := '(S)V';
-     args[0].s := varin;   end;
+     msyntax := '(I)V';
+     args[0].i := varin;
+   end;
    varInt64: begin
      // not supported -> string
      msyntax := '(Ljava/lang/String;)V';
-     args[0].l := JVM.StringToJString(PAnsiChar(VarToStr(varin)));
+     args[0].l := JVM.StringToJString(PAnsiChar(AnsiString(VarToStr(varin))));
    end;
    varStrArg: begin
      msyntax := '(Ljava/lang/String;)V';
-     args[0].l := JVM.StringToJString(PAnsiChar(VarToStr(varin)));
+     args[0].l := JVM.StringToJString(PAnsiChar(AnsiString(VarToStr(varin))));
    end;
    varString: begin
      msyntax := '(Ljava/lang/String;)V';
-     args[0].l := JVM.StringToJString(PAnsiChar(VarToStr(varin)));
+     args[0].l := JVM.StringToJString(PAnsiChar(AnsiString(VarToStr(varin))));
    end;
   end;
 
@@ -124,7 +133,7 @@ begin
   then raise VariantInternalException.Create('Class not found.');
 
   // Get correct constructor
-  Mid := JVM.GetMethodID(Cls, '<init>', PAnsiChar(msyntax));
+  Mid := JVM.GetMethodID(Cls, '<init>', PAnsiChar(AnsiString(msyntax)));
   if Mid = nil
   then raise VariantInternalException.Create('Method not found.');
 
@@ -210,10 +219,13 @@ begin
    VT_BOOL: begin
      methodID := 'getBoolean';
      output := '()Z';
-     vtype := VBOOLEAN;   end;   VT_VARIANT: begin
+     vtype := VBOOLEAN;
+   end;
+   VT_VARIANT: begin
      methodID := 'getVariant';
      output := '()Ljavafish/clients/opc/variant/Variant;';
-     vtype := VVARIANT;   end;
+     vtype := VVARIANT;
+   end;
    VT_UNKNOWN: begin
      // not supported -> string
      methodID := 'getString';
@@ -274,7 +286,7 @@ begin
   // Get correct data method
   if (vtype <> VEMPTY) and (vtype <> VNULL)
   then begin
-    GetMid := JVM.GetMethodID(varinClass, PAnsiChar(methodID), PAnsiChar(output));
+    GetMid := JVM.GetMethodID(varinClass, PAnsiChar(AnsiString(methodID)), PAnsiChar(AnsiString(output)));
     if GetMid = nil
     then raise VariantInternalException.Create('Method not found.');
   end;

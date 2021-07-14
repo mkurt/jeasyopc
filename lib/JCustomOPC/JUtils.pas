@@ -21,7 +21,7 @@ begin
   // Get the class associated with this object
   Cls := Env.GetObjectClass(Obj);
   // varib is a non-static integer field
-  FID := Env.GetFieldID(Cls, PChar(varib), 'I');
+  FID := Env.GetFieldID(Cls, PAnsiChar(AnsiString(varib)), 'I');
   // Get the value of the integer
   Result := Env.GetIntField(Obj, FID);
   Env.Free;
@@ -39,7 +39,7 @@ begin
   // Get the class associated with this object
   Cls := Env.GetObjectClass(Obj);
   // varib is a non-static integer field
-  FID := Env.GetFieldID(Cls, PChar(varib), 'I');
+  FID := Env.GetFieldID(Cls, PAnsiChar(AnsiString(varib)), 'I');
   // Get the value of the integer
   Env.SetIntField(Obj, FID, val);
   Env.Free;

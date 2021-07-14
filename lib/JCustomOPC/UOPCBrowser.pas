@@ -177,6 +177,7 @@ var
   ItemType     : TVarType;
   ItemValue    : Variant;
   ItemQuality  : Word;
+  ItemTimeStamp: TDateTime;
   GroupIf      : IOPCItemMgt;
   GroupHandle  : OPCHANDLE;
   IHandles     : array of OPCHANDLE;
@@ -190,80 +191,82 @@ begin
   if not Succeeded(HR)
   then raise UnableAddGroupException.Create('GroupTemp');
 
-  // Find path of opc-items
-  Result := TStringList.Create;
-  SetLength(IHandles, PTStringList(PVarList)^.Count);
+  try
+    // Find path of opc-items
+    Result := TStringList.Create;
+    SetLength(IHandles, PTStringList(PVarList)^.Count);
 
-  for i:=0 to PTStringList(PVarList)^.Count-1 do begin
-    HR := Browse.GetItemID(StringToOleStr(PTStringList(PVarList)^.Strings[i]), ItemName);
-    // estimate path
-    if not Succeeded(HR) then ItemName := StringToOleStr(Path + '.' +
-                                          PTStringList(PVarList)^.Strings[i]);
-    // get opc-item to group, get ItemType and ItemHandle
-    HR := GroupAddItem(GroupIf, ItemName, 0, VT_EMPTY, true, '', ItemHandle, ItemType);
+    for i:=0 to PTStringList(PVarList)^.Count-1 do begin
+      HR := Browse.GetItemID(StringToOleStr(PTStringList(PVarList)^.Strings[i]), ItemName);
+      // estimate path
+      if not Succeeded(HR) then ItemName := StringToOleStr(Path + '.' +
+                                            PTStringList(PVarList)^.Strings[i]);
+      // get opc-item to group, get ItemType and ItemHandle
+      HR := GroupAddItem(GroupIf, ItemName, 0, VT_EMPTY, true, '', ItemHandle, ItemType);
 
-    if not Succeeded(HR)
-    then begin
-      // end downloading leaf
-      raise UnableAddItemException.create('GroupTemp -> Item');
-    end
-    else begin
-      IHandles[i] := ItemHandle;
-      // prepare output structure: fullItemName, itemType, itemName
-      Result.Add(PTStringList(PVarList)^.Strings[i] + '; ' +
-                 VarTypeAsText(ItemType) + '; ' +
-                 ItemName);
-    end;
-  end;
-
-  // possible download values from server
-  if download and (PTStringList(PVarList)^.Count > 0)
-  then begin
-    Sleep(WAITIME * 7); // Need long time, empiric constants :-)
-
-    for i:=0 to PTStringList(PVarList)^.Count-1 do
-    begin
-      val := '';
-      ItemHandle := IHandles[i];
-      if ItemHandle <> 0
+      if not Succeeded(HR)
       then begin
-        // read value of item
-        try
-          HR := ReadOPCGroupItemValue(GroupIf, ItemHandle, ItemValue, ItemQuality);
-        except
-        end;
-        if Succeeded(HR)
-        then begin
-          if (ItemQuality and OPC_QUALITY_MASK) = OPC_QUALITY_GOOD
-          then begin
-            if not VarIsArray(ItemValue)
-            then val := VarToStr(ItemValue)
-            else begin
-              dimension := VarArrayDimCount(ItemValue);
-              val := '[';
-              for j:=VarArrayLowBound(ItemValue, dimension)
-                  to VarArrayHighBound(ItemValue, dimension) do
-              begin
-                val := val + VarToStr(ItemValue[j]);
-                if (j < VarArrayHighBound(ItemValue, dimension))
-                then val := val + ',';
-              end;
-              val := val + ']';
-            end;
-          end else val := 'bad quality';
-          VarClear(ItemValue);
-        end
-        else begin
-          Result[i] := Result[i] + '; ' + '---';
-        end;
-        // write value to Result
-        Result[i] := Result[i] + '; ' + val;
+        // end downloading leaf
+        raise UnableAddItemException.create('GroupTemp -> Item');
+      end
+      else begin
+        IHandles[i] := ItemHandle;
+        // prepare output structure: fullItemName, itemType, itemName
+        Result.Add(PTStringList(PVarList)^.Strings[i] + '; ' +
+                   VarTypeAsText(ItemType) + '; ' +
+                   ItemName);
       end;
     end;
-  end; // download values
 
-  // remove group
-  HR := ServerIf.RemoveGroup(GroupHandle, False);
+    // possible download values from server
+    if download and (PTStringList(PVarList)^.Count > 0)
+    then begin
+      Sleep(WAITIME * 7); // Need long time, empiric constants :-)
+
+      for i:=0 to PTStringList(PVarList)^.Count-1 do
+      begin
+        val := '';
+        ItemHandle := IHandles[i];
+        if ItemHandle <> 0
+        then begin
+          // read value of item
+          try
+            HR := ReadOPCGroupItemValue(GroupIf, ItemHandle, ItemValue, ItemQuality, ItemTimeStamp);
+          except
+          end;
+          if Succeeded(HR)
+          then begin
+            if (ItemQuality and OPC_QUALITY_MASK) = OPC_QUALITY_GOOD
+            then begin
+              if not VarIsArray(ItemValue)
+              then val := VarToStr(ItemValue)
+              else begin
+                dimension := VarArrayDimCount(ItemValue);
+                val := '[';
+                for j:=VarArrayLowBound(ItemValue, dimension)
+                    to VarArrayHighBound(ItemValue, dimension) do
+                begin
+                  val := val + VarToStr(ItemValue[j]);
+                  if (j < VarArrayHighBound(ItemValue, dimension))
+                  then val := val + ',';
+                end;
+                val := val + ']';
+              end;
+            end else val := 'bad quality';
+            VarClear(ItemValue);
+          end
+          else begin
+            Result[i] := Result[i] + '; ' + '---';
+          end;
+          // write value to Result
+          Result[i] := Result[i] + '; ' + val;
+        end;
+      end;
+    end; // download values
+  finally
+    // remove group
+    HR := ServerIf.RemoveGroup(GroupHandle, False);
+  end;
 end;
 
 end.

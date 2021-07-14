@@ -12,7 +12,7 @@
 { The original Pascal code is: jni.pas, released 01 Sep 2000.      }
 {                                                                  }
 { Portions created by Matthew Mead are                             }
-{ Copyright (C) 2001 MMG and Associates                            }
+{ Copyright (C) 2000-2002 MMG and Associates                       }
 {                                                                  }
 { Obtained through:                                                }
 { Joint Endeavour of Delphi Innovators (Project JEDI)              }
@@ -36,7 +36,29 @@
 {                 AttachCurrentThread, and DetachCurrentThread     }
 {   02 Jan 2001 - Fix in TJNIEnv.ArgsToJValues. Cast AnsiString    }
 {                 to JString.                                      }
-{                                                                  }
+{   13 Mar 2002 - In the TJavaVM wrapper class, made the JavaVM    }
+{                 and Env properties read/write. Previously, both  }
+{                 were set as read-only.                           }
+{   16 Mar 2002 - Added support for J2SDK v 1.4                    }
+{   02 Apr 2002 - Changed WIN32 directive to MSWINDOWS             }
+{   01 Nov 2002 - Implemented the TJNIEnv.NewObject method. It had }
+{                 been left unimplemented since the first version. }
+{   10 Sep 2006 - Aki Nieminen:                                    }
+{                 added JStringToWideString, WideStringToJString,  }
+{                 WideCharTOJString methods,ThrowException,        }
+{                 SetXXXMethod                                     }
+{   07 Apr 2007 - Aki Nieminen:                                    }
+{                 BytesToJByteArray, IntegersToJIntArray           }
+{                 JNI_BytesToJByteArray, JNI_IntegersToJIntArray   }
+{   09 Feb 2011 - Remy Lebeau:                                     }
+{                 Corrected bad function declarations to match     }
+{                 official JNI specification correctly.            }
+{                 Added new methods to TJavaVM                     }
+{                 Tweaks to Error handling                         }
+{                 Added UnicodeString support                      }
+{   29 Oct 2014 - Alessio Pollero:                                 }
+{                 Added new JNI Versions (up to version 8)         }
+{                 Fix ArgsToJValues to work with Delphi XE2 onwards}
 {******************************************************************}
 
 unit JNI;
@@ -44,8 +66,8 @@ unit JNI;
 interface
 
 uses
-  {$IFDEF WIN32}
-  Windows,
+  {$IFDEF MSWINDOWS}
+  Windows, Types,
   {$ENDIF}
   {$IFDEF LINUX}
   Types, Libc,
@@ -67,7 +89,24 @@ uses
 
 {$IFDEF LINUX}
 type
-  va_list = PChar;
+  va_list = PAnsiChar;
+{$ENDIF}
+
+{$IFDEF CONDITIONALEXPRESSIONS}
+  {$IF RTLVersion >= 20.0}
+    {$DEFINE HAS_RAWBYTESTRING}
+    {$DEFINE HAS_UNICODESTRING}
+  {$IFEND}
+{$ENDIF}
+
+{$IFNDEF HAS_UNICODESTRING}
+type
+  RawByteString = AnsiString;
+{$ENDIF}
+
+{$IFNDEF HAS_UNICODESTRING}
+type
+  UnicodeString = WideString;
 {$ENDIF}
 
 const
@@ -75,12 +114,21 @@ const
   {$EXTERNALSYM JNI_VERSION_1_1}
   JNI_VERSION_1_2 = JInt($00010002);
   {$EXTERNALSYM JNI_VERSION_1_2}
-
+  JNI_VERSION_1_4 = JInt($00010004);
+  {$EXTERNALSYM JNI_VERSION_1_4}
+  JNI_VERSION_1_6 = JInt($00010006);
+  {$EXTERNALSYM JNI_VERSION_1_6}
+  JNI_VERSION_1_7 = JInt($00010007);
+  {$EXTERNALSYM JNI_VERSION_1_7}
+  JNI_VERSION_1_8 = JInt($00010008);
+  {$EXTERNALSYM JNI_VERSION_1_8}
+  JNI_VERSION_1_9 = JInt($00010009);
+  {$EXTERNALSYM JNI_VERSION_1_9}
   // JBoolean constants
-  JNI_TRUE  = True;
-  {$EXTERNALSYM JNI_TRUE}
-  JNI_FALSE = False;
+  JNI_FALSE = 0;
   {$EXTERNALSYM JNI_FALSE}
+  JNI_TRUE  = 1;
+  {$EXTERNALSYM JNI_TRUE}
 
   // possible return values for JNI functions.
   JNI_OK        =  0;  // success
@@ -97,8 +145,6 @@ const
   {$EXTERNALSYM JNI_EEXIST}
   JNI_EINVAL    = -6;  // invalid arguments
   {$EXTERNALSYM JNI_EINVAL}
-
-  JNI_ENOJAVA   = -101; // local error for not finding the DLL
 
   // used in ReleaseScalarArrayElements
   JNI_COMMIT = 1;
@@ -207,8 +253,9 @@ type
   // JNI Invocation Interface.
   JavaVM              = ^JNIInvokeInterface_;
   {$EXTERNALSYM JavaVM}
-  PJNIInvokeInterface = ^JNIInvokeInterface_;
   PJavaVM             = ^JavaVM;
+  PPJavaVM            = ^PJavaVM;
+  PJNIInvokeInterface = ^JNIInvokeInterface_;
 
   JNINativeInterface_ = packed record
     reserved0: Pointer;
@@ -216,303 +263,309 @@ type
     reserved2: Pointer;
     reserved3: Pointer;
 
-    GetVersion: function(Env: PJNIEnv): JInt; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    DefineClass: function(Env: PJNIEnv; const Name: PAnsiChar; Loader: JObject; const Buf: PJByte; Len: JSize): JClass; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    FindClass: function(Env: PJNIEnv; const Name: PAnsiChar): JClass; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    GetVersion: function(Env: PJNIEnv): JInt; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    DefineClass: function(Env: PJNIEnv; const Name: PAnsiChar; Loader: JObject; const Buf: PJByte; Len: JSize): JClass; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    FindClass: function(Env: PJNIEnv; const Name: PAnsiChar): JClass; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
     // Reflection Support
-    FromReflectedMethod: function(Env: PJNIEnv; Method: JObject): JMethodID; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    FromReflectedField: function(Env: PJNIEnv; Field: JObject): JFieldID; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    ToReflectedMethod: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID; IsStatic: JBoolean): JObject; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    FromReflectedMethod: function(Env: PJNIEnv; Method: JObject): JMethodID; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    FromReflectedField: function(Env: PJNIEnv; Field: JObject): JFieldID; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    ToReflectedMethod: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID; IsStatic: JBoolean): JObject; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
-    GetSuperclass: function(Env: PJNIEnv; Sub: JClass): JClass; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    IsAssignableFrom: function(Env: PJNIEnv; Sub: JClass; Sup: JClass): JBoolean; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    GetSuperclass: function(Env: PJNIEnv; Sub: JClass): JClass; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    IsAssignableFrom: function(Env: PJNIEnv; Sub: JClass; Sup: JClass): JBoolean; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
     // Reflection Support
-    ToReflectedField: function(Env: PJNIEnv; AClass: JClass; FieldID: JFieldID; IsStatic: JBoolean): JObject; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    ToReflectedField: function(Env: PJNIEnv; AClass: JClass; FieldID: JFieldID; IsStatic: JBoolean): JObject; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
-    Throw: function(Env: PJNIEnv; Obj: JThrowable): JInt; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    ThrowNew: function(Env: PJNIEnv; AClass: JClass; const Msg: PAnsiChar): JInt; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    ExceptionOccurred: function(Env: PJNIEnv): JThrowable; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    ExceptionDescribe: procedure(Env: PJNIEnv); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    ExceptionClear: procedure(Env: PJNIEnv); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    FatalError: procedure(Env: PJNIEnv; const Msg: PAnsiChar); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-
-    // Local Reference Management
-    PushLocalFrame: function(Env: PJNIEnv; Capacity: JInt): JInt; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    PopLocalFrame: function(Env: PJNIEnv; Result: JObject): JObject; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-
-    NewGlobalRef: function(Env: PJNIEnv; LObj: JObject): JObject; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    DeleteGlobalRef: procedure(Env: PJNIEnv; GRef: JObject); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    DeleteLocalRef: procedure(Env: PJNIEnv; Obj: JObject); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    IsSameObject: function(Env: PJNIEnv; Obj1: JObject; Obj2: JObject): JBoolean; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    Throw: function(Env: PJNIEnv; Obj: JThrowable): JInt; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    ThrowNew: function(Env: PJNIEnv; AClass: JClass; const Msg: PAnsiChar): JInt; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    ExceptionOccurred: function(Env: PJNIEnv): JThrowable; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    ExceptionDescribe: procedure(Env: PJNIEnv); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    ExceptionClear: procedure(Env: PJNIEnv); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    FatalError: procedure(Env: PJNIEnv; const Msg: PAnsiChar); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
     // Local Reference Management
-    NewLocalRef: function(Env: PJNIEnv; Ref: JObject): JObject; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    EnsureLocalCapacity: function(Env: PJNIEnv; Capacity: JInt): JObject; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    PushLocalFrame: function(Env: PJNIEnv; Capacity: JInt): JInt; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    PopLocalFrame: function(Env: PJNIEnv; Result: JObject): JObject; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
-    AllocObject: function(Env: PJNIEnv; AClass: JClass): JObject; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    NewObject: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID): JObject; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    NewObjectV: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID; Args: va_list): JObject; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    NewObjectA: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID; Args: PJValue): JObject; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    NewGlobalRef: function(Env: PJNIEnv; LObj: JObject): JObject; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    DeleteGlobalRef: procedure(Env: PJNIEnv; GRef: JObject); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    DeleteLocalRef: procedure(Env: PJNIEnv; Obj: JObject); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    IsSameObject: function(Env: PJNIEnv; Obj1: JObject; Obj2: JObject): JBoolean; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
-    GetObjectClass: function(Env: PJNIEnv; Obj: JObject): JClass; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    IsInstanceOf: function(Env: PJNIEnv; Obj: JObject; AClass: JClass): JBoolean; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    // Local Reference Management
+    NewLocalRef: function(Env: PJNIEnv; Ref: JObject): JObject; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    EnsureLocalCapacity: function(Env: PJNIEnv; Capacity: JInt): JInt; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
-    GetMethodID: function(Env: PJNIEnv; AClass: JClass; const Name: PAnsiChar; const Sig: PAnsiChar): JMethodID; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    AllocObject: function(Env: PJNIEnv; AClass: JClass): JObject; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    NewObject: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID): JObject; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    NewObjectV: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID; Args: va_list): JObject; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    NewObjectA: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID; Args: PJValue): JObject; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
-    CallObjectMethod: function(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID): JObject; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallObjectMethodV: function(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID; Args: va_list): JObject; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallObjectMethodA: function(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID; Args: PJValue): JObject; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    GetObjectClass: function(Env: PJNIEnv; Obj: JObject): JClass; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    IsInstanceOf: function(Env: PJNIEnv; Obj: JObject; AClass: JClass): JBoolean; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
-    CallBooleanMethod: function(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID): JBoolean; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallBooleanMethodV: function(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID; Args: va_list): JBoolean; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallBooleanMethodA: function(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID; Args: PJValue): JBoolean; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    GetMethodID: function(Env: PJNIEnv; AClass: JClass; const Name: PAnsiChar; const Sig: PAnsiChar): JMethodID; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
-    CallByteMethod: function(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID): JByte; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallByteMethodV: function(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID; Args: va_list): JByte; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallByteMethodA: function(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID; Args: PJValue): JByte; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallObjectMethod: function(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID): JObject; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallObjectMethodV: function(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID; Args: va_list): JObject; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallObjectMethodA: function(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID; Args: PJValue): JObject; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
-    CallCharMethod: function(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID): JChar; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallCharMethodV: function(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID; Args: va_list): JChar; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallCharMethodA: function(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID; Args: PJValue): JChar; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallBooleanMethod: function(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID): JBoolean; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallBooleanMethodV: function(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID; Args: va_list): JBoolean; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallBooleanMethodA: function(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID; Args: PJValue): JBoolean; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
-    CallShortMethod: function(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID): JShort; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallShortMethodV: function(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID; Args: va_list): JShort; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallShortMethodA: function(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID; Args: PJValue): JShort; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallByteMethod: function(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID): JByte; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallByteMethodV: function(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID; Args: va_list): JByte; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallByteMethodA: function(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID; Args: PJValue): JByte; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
-    CallIntMethod: function(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID): JInt; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallIntMethodV: function(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID; Args: va_list): JInt; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallIntMethodA: function(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID; Args: PJValue): JInt; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallCharMethod: function(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID): JChar; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallCharMethodV: function(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID; Args: va_list): JChar; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallCharMethodA: function(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID; Args: PJValue): JChar; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
-    CallLongMethod: function(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID): JLong; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallLongMethodV: function(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID; Args: va_list): JLong; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallLongMethodA: function(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID; Args: PJValue): JLong; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallShortMethod: function(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID): JShort; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallShortMethodV: function(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID; Args: va_list): JShort; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallShortMethodA: function(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID; Args: PJValue): JShort; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
-    CallFloatMethod: function(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID): JFloat; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallFloatMethodV: function(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID; Args: va_list): JFloat; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallFloatMethodA: function(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID; Args: PJValue): JFloat; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallIntMethod: function(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID): JInt; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallIntMethodV: function(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID; Args: va_list): JInt; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallIntMethodA: function(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID; Args: PJValue): JInt; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
-    CallDoubleMethod: function(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID): JDouble; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallDoubleMethodV: function(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID; Args: va_list): JDouble; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallDoubleMethodA: function(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID; Args: PJValue): JDouble; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallLongMethod: function(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID): JLong; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallLongMethodV: function(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID; Args: va_list): JLong; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallLongMethodA: function(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID; Args: PJValue): JLong; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
-    CallVoidMethod: procedure(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallVoidMethodV: procedure(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID; Args: va_list); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallVoidMethodA: procedure(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID; Args: PJValue); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallFloatMethod: function(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID): JFloat; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallFloatMethodV: function(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID; Args: va_list): JFloat; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallFloatMethodA: function(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID; Args: PJValue): JFloat; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
-    CallNonvirtualObjectMethod: function(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID): JObject; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallNonvirtualObjectMethodV: function(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID; Args: va_list): JObject; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallNonvirtualObjectMethodA: function(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID; Args: PJValue): JObject; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallDoubleMethod: function(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID): JDouble; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallDoubleMethodV: function(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID; Args: va_list): JDouble; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallDoubleMethodA: function(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID; Args: PJValue): JDouble; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
-    CallNonvirtualBooleanMethod: function(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID): JBoolean; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallNonvirtualBooleanMethodV: function(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID; Args: va_list): JBoolean; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallNonvirtualBooleanMethodA: function(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID; Args: PJValue): JBoolean; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallVoidMethod: procedure(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallVoidMethodV: procedure(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID; Args: va_list); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallVoidMethodA: procedure(Env: PJNIEnv; Obj: JObject; MethodID: JMethodID; Args: PJValue); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
-    CallNonvirtualByteMethod: function(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID): JByte; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallNonvirtualByteMethodV: function(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID; Args: va_list): JByte; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallNonvirtualByteMethodA: function(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID; Args: PJValue): JByte; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallNonvirtualObjectMethod: function(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID): JObject; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallNonvirtualObjectMethodV: function(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID; Args: va_list): JObject; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallNonvirtualObjectMethodA: function(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID; Args: PJValue): JObject; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
-    CallNonvirtualCharMethod: function(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID): JChar; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallNonvirtualCharMethodV: function(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID; Args: va_list): JChar; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallNonvirtualCharMethodA: function(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID; Args: PJValue): JChar; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallNonvirtualBooleanMethod: function(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID): JBoolean; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallNonvirtualBooleanMethodV: function(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID; Args: va_list): JBoolean; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallNonvirtualBooleanMethodA: function(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID; Args: PJValue): JBoolean; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
-    CallNonvirtualShortMethod: function(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID): JShort; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallNonvirtualShortMethodV: function(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID; Args: va_list): JShort; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallNonvirtualShortMethodA: function(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID; Args: PJValue): JShort; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallNonvirtualByteMethod: function(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID): JByte; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallNonvirtualByteMethodV: function(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID; Args: va_list): JByte; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallNonvirtualByteMethodA: function(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID; Args: PJValue): JByte; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
-    CallNonvirtualIntMethod: function(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID): JInt; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallNonvirtualIntMethodV: function(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID; Args: va_list): JInt; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallNonvirtualIntMethodA: function(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID; Args: PJValue): JInt; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallNonvirtualCharMethod: function(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID): JChar; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallNonvirtualCharMethodV: function(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID; Args: va_list): JChar; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallNonvirtualCharMethodA: function(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID; Args: PJValue): JChar; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
-    CallNonvirtualLongMethod: function(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID): JLong; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallNonvirtualLongMethodV: function(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID; Args: va_list): JLong; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallNonvirtualLongMethodA: function(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID; Args: PJValue): JLong; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallNonvirtualShortMethod: function(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID): JShort; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallNonvirtualShortMethodV: function(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID; Args: va_list): JShort; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallNonvirtualShortMethodA: function(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID; Args: PJValue): JShort; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
-    CallNonvirtualFloatMethod: function(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID): JFloat; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallNonvirtualFloatMethodV: function(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID; Args: va_list): JFloat; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallNonvirtualFloatMethodA: function(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID; Args: PJValue): JFloat; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallNonvirtualIntMethod: function(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID): JInt; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallNonvirtualIntMethodV: function(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID; Args: va_list): JInt; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallNonvirtualIntMethodA: function(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID; Args: PJValue): JInt; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
-    CallNonvirtualDoubleMethod: function(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID): JDouble; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallNonvirtualDoubleMethodV: function(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID; Args: va_list): JDouble; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallNonvirtualDoubleMethodA: function(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID; Args: PJValue): JDouble; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallNonvirtualLongMethod: function(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID): JLong; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallNonvirtualLongMethodV: function(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID; Args: va_list): JLong; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallNonvirtualLongMethodA: function(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID; Args: PJValue): JLong; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
-    CallNonvirtualVoidMethod: procedure(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallNonvirtualVoidMethodV: procedure(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID; Args: va_list); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallNonvirtualVoidMethodA: procedure(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID; Args: PJValue); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallNonvirtualFloatMethod: function(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID): JFloat; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallNonvirtualFloatMethodV: function(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID; Args: va_list): JFloat; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallNonvirtualFloatMethodA: function(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID; Args: PJValue): JFloat; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
-    GetFieldID: function(Env: PJNIEnv; AClass: JClass; const Name: PAnsiChar; const Sig: PAnsiChar): JFieldID; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallNonvirtualDoubleMethod: function(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID): JDouble; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallNonvirtualDoubleMethodV: function(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID; Args: va_list): JDouble; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallNonvirtualDoubleMethodA: function(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID; Args: PJValue): JDouble; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
-    GetObjectField: function(Env: PJNIEnv; Obj: JObject; FieldID: JFieldID): JObject; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    GetBooleanField: function(Env: PJNIEnv; Obj: JObject; FieldID: JFieldID): JBoolean; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    GetByteField: function(Env: PJNIEnv; Obj: JObject; FieldID: JFieldID): JByte; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    GetCharField: function(Env: PJNIEnv; Obj: JObject; FieldID: JFieldID): JChar; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    GetShortField: function(Env: PJNIEnv; Obj: JObject; FieldID: JFieldID): JShort; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    GetIntField: function(Env: PJNIEnv; Obj: JObject; FieldID: JFieldID): JInt; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    GetLongField: function(Env: PJNIEnv; Obj: JObject; FieldID: JFieldID): JLong; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    GetFloatField: function(Env: PJNIEnv; Obj: JObject; FieldID: JFieldID): JFloat; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    GetDoubleField: function(Env: PJNIEnv; Obj: JObject; FieldID: JFieldID): JDouble; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallNonvirtualVoidMethod: procedure(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallNonvirtualVoidMethodV: procedure(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID; Args: va_list); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallNonvirtualVoidMethodA: procedure(Env: PJNIEnv; Obj: JObject; AClass: JClass; MethodID: JMethodID; Args: PJValue); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
-    SetObjectField: procedure(Env: PJNIEnv; Obj: JObject; FieldID: JFieldID; Val: JObject); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    SetBooleanField: procedure(Env: PJNIEnv; Obj: JObject; FieldID: JFieldID; Val: JBoolean); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    SetByteField: procedure(Env: PJNIEnv; Obj: JObject; FieldID: JFieldID; Val: JByte); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    SetCharField: procedure(Env: PJNIEnv; Obj: JObject; FieldID: JFieldID; Val: JChar); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    SetShortField: procedure(Env: PJNIEnv; Obj: JObject; FieldID: JFieldID; Val: JShort); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    SetIntField: procedure(Env: PJNIEnv; Obj: JObject; FieldID: JFieldID; Val: JInt); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    SetLongField: procedure(Env: PJNIEnv; Obj: JObject; FieldID: JFieldID; Val: JLong); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    SetFloatField: procedure(Env: PJNIEnv; Obj: JObject; FieldID: JFieldID; Val: JFloat); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    SetDoubleField: procedure(Env: PJNIEnv; Obj: JObject; FieldID: JFieldID; Val: JDouble); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    GetFieldID: function(Env: PJNIEnv; AClass: JClass; const Name: PAnsiChar; const Sig: PAnsiChar): JFieldID; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
-    GetStaticMethodID: function(Env: PJNIEnv; AClass: JClass; const Name: PAnsiChar; const Sig: PAnsiChar): JMethodID; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    GetObjectField: function(Env: PJNIEnv; Obj: JObject; FieldID: JFieldID): JObject; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    GetBooleanField: function(Env: PJNIEnv; Obj: JObject; FieldID: JFieldID): JBoolean; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    GetByteField: function(Env: PJNIEnv; Obj: JObject; FieldID: JFieldID): JByte; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    GetCharField: function(Env: PJNIEnv; Obj: JObject; FieldID: JFieldID): JChar; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    GetShortField: function(Env: PJNIEnv; Obj: JObject; FieldID: JFieldID): JShort; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    GetIntField: function(Env: PJNIEnv; Obj: JObject; FieldID: JFieldID): JInt; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    GetLongField: function(Env: PJNIEnv; Obj: JObject; FieldID: JFieldID): JLong; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    GetFloatField: function(Env: PJNIEnv; Obj: JObject; FieldID: JFieldID): JFloat; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    GetDoubleField: function(Env: PJNIEnv; Obj: JObject; FieldID: JFieldID): JDouble; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
-    CallStaticObjectMethod: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID): JObject; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallStaticObjectMethodV: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID; Args: va_list): JObject; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallStaticObjectMethodA: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID; Args: PJValue): JObject; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    SetObjectField: procedure(Env: PJNIEnv; Obj: JObject; FieldID: JFieldID; Val: JObject); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    SetBooleanField: procedure(Env: PJNIEnv; Obj: JObject; FieldID: JFieldID; Val: JBoolean); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    SetByteField: procedure(Env: PJNIEnv; Obj: JObject; FieldID: JFieldID; Val: JByte); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    SetCharField: procedure(Env: PJNIEnv; Obj: JObject; FieldID: JFieldID; Val: JChar); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    SetShortField: procedure(Env: PJNIEnv; Obj: JObject; FieldID: JFieldID; Val: JShort); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    SetIntField: procedure(Env: PJNIEnv; Obj: JObject; FieldID: JFieldID; Val: JInt); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    SetLongField: procedure(Env: PJNIEnv; Obj: JObject; FieldID: JFieldID; Val: JLong); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    SetFloatField: procedure(Env: PJNIEnv; Obj: JObject; FieldID: JFieldID; Val: JFloat); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    SetDoubleField: procedure(Env: PJNIEnv; Obj: JObject; FieldID: JFieldID; Val: JDouble); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
-    CallStaticBooleanMethod: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID): JBoolean; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallStaticBooleanMethodV: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID; Args: va_list): JBoolean; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallStaticBooleanMethodA: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID; Args: PJValue): JBoolean; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    GetStaticMethodID: function(Env: PJNIEnv; AClass: JClass; const Name: PAnsiChar; const Sig: PAnsiChar): JMethodID; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
-    CallStaticByteMethod: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID): JByte; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallStaticByteMethodV: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID; Args: va_list): JByte; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallStaticByteMethodA: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID; Args: PJValue): JByte; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallStaticObjectMethod: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID): JObject; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallStaticObjectMethodV: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID; Args: va_list): JObject; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallStaticObjectMethodA: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID; Args: PJValue): JObject; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
-    CallStaticCharMethod: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID): JChar; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallStaticCharMethodV: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID; Args: va_list): JChar; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallStaticCharMethodA: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID; Args: PJValue): JChar; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallStaticBooleanMethod: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID): JBoolean; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallStaticBooleanMethodV: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID; Args: va_list): JBoolean; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallStaticBooleanMethodA: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID; Args: PJValue): JBoolean; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
-    CallStaticShortMethod: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID): JShort; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallStaticShortMethodV: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID; Args: va_list): JShort; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallStaticShortMethodA: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID; Args: PJValue): JShort; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallStaticByteMethod: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID): JByte; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallStaticByteMethodV: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID; Args: va_list): JByte; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallStaticByteMethodA: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID; Args: PJValue): JByte; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
-    CallStaticIntMethod: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID): JInt; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallStaticIntMethodV: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID; Args: va_list): JInt; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallStaticIntMethodA: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID; Args: PJValue): JInt; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallStaticCharMethod: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID): JChar; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallStaticCharMethodV: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID; Args: va_list): JChar; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallStaticCharMethodA: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID; Args: PJValue): JChar; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
-    CallStaticLongMethod: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID): JLong; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallStaticLongMethodV: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID; Args: va_list): JLong; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallStaticLongMethodA: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID; Args: PJValue): JLong; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallStaticShortMethod: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID): JShort; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallStaticShortMethodV: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID; Args: va_list): JShort; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallStaticShortMethodA: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID; Args: PJValue): JShort; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
-    CallStaticFloatMethod: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID): JFloat; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallStaticFloatMethodV: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID; Args: va_list): JFloat; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallStaticFloatMethodA: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID; Args: PJValue): JFloat; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallStaticIntMethod: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID): JInt; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallStaticIntMethodV: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID; Args: va_list): JInt; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallStaticIntMethodA: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID; Args: PJValue): JInt; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
-    CallStaticDoubleMethod: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID): JDouble; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallStaticDoubleMethodV: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID; Args: va_list): JDouble; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallStaticDoubleMethodA: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID; Args: PJValue): JDouble; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallStaticLongMethod: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID): JLong; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallStaticLongMethodV: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID; Args: va_list): JLong; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallStaticLongMethodA: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID; Args: PJValue): JLong; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
-    CallStaticVoidMethod: procedure(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallStaticVoidMethodV: procedure(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID; Args: va_list); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    CallStaticVoidMethodA: procedure(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID; Args: PJValue); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallStaticFloatMethod: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID): JFloat; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallStaticFloatMethodV: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID; Args: va_list): JFloat; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallStaticFloatMethodA: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID; Args: PJValue): JFloat; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
-    GetStaticFieldID: function(Env: PJNIEnv; AClass: JClass; const Name: PAnsiChar; const Sig: PAnsiChar): JFieldID; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    GetStaticObjectField: function(Env: PJNIEnv; AClass: JClass; FieldID: JFieldID): JObject; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    GetStaticBooleanField: function(Env: PJNIEnv; AClass: JClass; FieldID: JFieldID): JBoolean; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    GetStaticByteField: function(Env: PJNIEnv; AClass: JClass; FieldID: JFieldID): JByte; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    GetStaticCharField: function(Env: PJNIEnv; AClass: JClass; FieldID: JFieldID): JChar; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    GetStaticShortField: function(Env: PJNIEnv; AClass: JClass; FieldID: JFieldID): JShort; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    GetStaticIntField: function(Env: PJNIEnv; AClass: JClass; FieldID: JFieldID): JInt; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    GetStaticLongField: function(Env: PJNIEnv; AClass: JClass; FieldID: JFieldID): JLong; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    GetStaticFloatField: function(Env: PJNIEnv; AClass: JClass; FieldID: JFieldID): JFloat; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    GetStaticDoubleField: function(Env: PJNIEnv; AClass: JClass; FieldID: JFieldID): JDouble; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallStaticDoubleMethod: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID): JDouble; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallStaticDoubleMethodV: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID; Args: va_list): JDouble; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallStaticDoubleMethodA: function(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID; Args: PJValue): JDouble; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
-    SetStaticObjectField: procedure(Env: PJNIEnv; AClass: JClass; FieldID: JFieldID; Val: JObject); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    SetStaticBooleanField: procedure(Env: PJNIEnv; AClass: JClass; FieldID: JFieldID; Val: JBoolean); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    SetStaticByteField: procedure(Env: PJNIEnv; AClass: JClass; FieldID: JFieldID; Val: JByte); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    SetStaticCharField: procedure(Env: PJNIEnv; AClass: JClass; FieldID: JFieldID; Val: JChar); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    SetStaticShortField: procedure(Env: PJNIEnv; AClass: JClass; FieldID: JFieldID; Val: JShort); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    SetStaticIntField: procedure(Env: PJNIEnv; AClass: JClass; FieldID: JFieldID; Val: JInt); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    SetStaticLongField: procedure(Env: PJNIEnv; AClass: JClass; FieldID: JFieldID; Val: JLong); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    SetStaticFloatField: procedure(Env: PJNIEnv; AClass: JClass; FieldID: JFieldID; Val: JFloat); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    SetStaticDoubleField: procedure(Env: PJNIEnv; AClass: JClass; FieldID: JFieldID; Val: JDouble); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallStaticVoidMethod: procedure(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallStaticVoidMethodV: procedure(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID; Args: va_list); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    CallStaticVoidMethodA: procedure(Env: PJNIEnv; AClass: JClass; MethodID: JMethodID; Args: PJValue); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
-    NewString: function(Env: PJNIEnv; const Unicode: PJChar; Len: JSize): JString; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    GetStringLength: function(Env: PJNIEnv; Str: JString): JSize; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    GetStringChars: function(Env: PJNIEnv; Str: JString; var IsCopy: JBoolean): PJChar; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    ReleaseStringChars: procedure(Env: PJNIEnv; Str: JString; const Chars: PJChar); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    GetStaticFieldID: function(Env: PJNIEnv; AClass: JClass; const Name: PAnsiChar; const Sig: PAnsiChar): JFieldID; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    GetStaticObjectField: function(Env: PJNIEnv; AClass: JClass; FieldID: JFieldID): JObject; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    GetStaticBooleanField: function(Env: PJNIEnv; AClass: JClass; FieldID: JFieldID): JBoolean; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    GetStaticByteField: function(Env: PJNIEnv; AClass: JClass; FieldID: JFieldID): JByte; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    GetStaticCharField: function(Env: PJNIEnv; AClass: JClass; FieldID: JFieldID): JChar; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    GetStaticShortField: function(Env: PJNIEnv; AClass: JClass; FieldID: JFieldID): JShort; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    GetStaticIntField: function(Env: PJNIEnv; AClass: JClass; FieldID: JFieldID): JInt; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    GetStaticLongField: function(Env: PJNIEnv; AClass: JClass; FieldID: JFieldID): JLong; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    GetStaticFloatField: function(Env: PJNIEnv; AClass: JClass; FieldID: JFieldID): JFloat; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    GetStaticDoubleField: function(Env: PJNIEnv; AClass: JClass; FieldID: JFieldID): JDouble; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
-    NewStringUTF: function(Env: PJNIEnv; const UTF: PAnsiChar): JString; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    GetStringUTFLength: function(Env: PJNIEnv; Str: JString): JSize; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    GetStringUTFChars: function(Env: PJNIEnv; Str: JString; var IsCopy: JBoolean): PAnsiChar; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    ReleaseStringUTFChars: procedure(Env: PJNIEnv; Str: JString; const Chars: PAnsiChar); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    SetStaticObjectField: procedure(Env: PJNIEnv; AClass: JClass; FieldID: JFieldID; Val: JObject); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    SetStaticBooleanField: procedure(Env: PJNIEnv; AClass: JClass; FieldID: JFieldID; Val: JBoolean); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    SetStaticByteField: procedure(Env: PJNIEnv; AClass: JClass; FieldID: JFieldID; Val: JByte); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    SetStaticCharField: procedure(Env: PJNIEnv; AClass: JClass; FieldID: JFieldID; Val: JChar); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    SetStaticShortField: procedure(Env: PJNIEnv; AClass: JClass; FieldID: JFieldID; Val: JShort); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    SetStaticIntField: procedure(Env: PJNIEnv; AClass: JClass; FieldID: JFieldID; Val: JInt); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    SetStaticLongField: procedure(Env: PJNIEnv; AClass: JClass; FieldID: JFieldID; Val: JLong); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    SetStaticFloatField: procedure(Env: PJNIEnv; AClass: JClass; FieldID: JFieldID; Val: JFloat); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    SetStaticDoubleField: procedure(Env: PJNIEnv; AClass: JClass; FieldID: JFieldID; Val: JDouble); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
-    GetArrayLength: function(Env: PJNIEnv; AArray: JArray): JSize; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    NewString: function(Env: PJNIEnv; const Unicode: PJChar; Len: JSize): JString; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    GetStringLength: function(Env: PJNIEnv; Str: JString): JSize; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    GetStringChars: function(Env: PJNIEnv; Str: JString; IsCopy: PJBoolean): PJChar; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    ReleaseStringChars: procedure(Env: PJNIEnv; Str: JString; const Chars: PJChar); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
-    NewObjectArray: function(Env: PJNIEnv; Len: JSize; AClass: JClass; Init: JObject): JObjectArray; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    GetObjectArrayElement: function(Env: PJNIEnv; AArray: JObjectArray; Index: JSize): JObject; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    SetObjectArrayElement: procedure(Env: PJNIEnv; AArray: JObjectArray; Index: JSize; Val: JObject); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    NewStringUTF: function(Env: PJNIEnv; const UTF: PAnsiChar): JString; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    GetStringUTFLength: function(Env: PJNIEnv; Str: JString): JSize; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    GetStringUTFChars: function(Env: PJNIEnv; Str: JString; IsCopy: PJBoolean): PAnsiChar; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    ReleaseStringUTFChars: procedure(Env: PJNIEnv; Str: JString; const Chars: PAnsiChar); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
-    NewBooleanArray: function(Env: PJNIEnv; Len: JSize): JBooleanArray; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    NewByteArray: function(Env: PJNIEnv; Len: JSize): JByteArray; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    NewCharArray: function(Env: PJNIEnv; Len: JSize): JCharArray; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    NewShortArray: function(Env: PJNIEnv; Len: JSize): JShortArray; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    NewIntArray: function(Env: PJNIEnv; Len: JSize): JIntArray; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    NewLongArray: function(Env: PJNIEnv; Len: JSize): JLongArray; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    NewFloatArray: function(Env: PJNIEnv; Len: JSize): JFloatArray; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    NewDoubleArray: function(Env: PJNIEnv; Len: JSize): JDoubleArray; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    GetArrayLength: function(Env: PJNIEnv; AArray: JArray): JSize; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
-    GetBooleanArrayElements: function(Env: PJNIEnv; AArray: JBooleanArray; var IsCopy: JBoolean): PJBoolean; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    GetByteArrayElements: function(Env: PJNIEnv; AArray: JByteArray; var IsCopy: JBoolean): PJByte; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    GetCharArrayElements: function(Env: PJNIEnv; AArray: JCharArray; var IsCopy: JBoolean): PJChar; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    GetShortArrayElements: function(Env: PJNIEnv; AArray: JShortArray; var IsCopy: JBoolean): PJShort; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    GetIntArrayElements: function(Env: PJNIEnv; AArray: JIntArray; var IsCopy: JBoolean): PJInt; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    GetLongArrayElements: function(Env: PJNIEnv; AArray: JLongArray; var IsCopy: JBoolean): PJLong; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    GetFloatArrayElements: function(Env: PJNIEnv; AArray: JFloatArray; var IsCopy: JBoolean): PJFloat; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    GetDoubleArrayElements: function(Env: PJNIEnv; AArray: JDoubleArray; var IsCopy: JBoolean): PJDouble; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    NewObjectArray: function(Env: PJNIEnv; Len: JSize; AClass: JClass; Init: JObject): JObjectArray; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    GetObjectArrayElement: function(Env: PJNIEnv; AArray: JObjectArray; Index: JSize): JObject; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    SetObjectArrayElement: procedure(Env: PJNIEnv; AArray: JObjectArray; Index: JSize; Val: JObject); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
-    ReleaseBooleanArrayElements: procedure(Env: PJNIEnv; AArray: JBooleanArray; Elems: PJBoolean; Mode: JInt); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    ReleaseByteArrayElements: procedure(Env: PJNIEnv; AArray: JByteArray; Elems: PJByte; Mode: JInt); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    ReleaseCharArrayElements: procedure(Env: PJNIEnv; AArray: JCharArray; Elems: PJChar; Mode: JInt); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    ReleaseShortArrayElements: procedure(Env: PJNIEnv; AArray: JShortArray; Elems: PJShort; Mode: JInt); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    ReleaseIntArrayElements: procedure(Env: PJNIEnv; AArray: JIntArray; Elems: PJInt; Mode: JInt); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    ReleaseLongArrayElements: procedure(Env: PJNIEnv; AArray: JLongArray; Elems: PJLong; Mode: JInt); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    ReleaseFloatArrayElements: procedure(Env: PJNIEnv; AArray: JFloatArray; Elems: PJFloat; Mode: JInt); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    ReleaseDoubleArrayElements: procedure(Env: PJNIEnv; AArray: JDoubleArray; Elems: PJDouble; Mode: JInt); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    NewBooleanArray: function(Env: PJNIEnv; Len: JSize): JBooleanArray; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    NewByteArray: function(Env: PJNIEnv; Len: JSize): JByteArray; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    NewCharArray: function(Env: PJNIEnv; Len: JSize): JCharArray; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    NewShortArray: function(Env: PJNIEnv; Len: JSize): JShortArray; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    NewIntArray: function(Env: PJNIEnv; Len: JSize): JIntArray; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    NewLongArray: function(Env: PJNIEnv; Len: JSize): JLongArray; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    NewFloatArray: function(Env: PJNIEnv; Len: JSize): JFloatArray; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    NewDoubleArray: function(Env: PJNIEnv; Len: JSize): JDoubleArray; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
-    GetBooleanArrayRegion: procedure(Env: PJNIEnv; AArray: JBooleanArray; Start: JSize; Len: JSize; Buf: PJBoolean); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    GetByteArrayRegion: procedure(Env: PJNIEnv; AArray: JByteArray; Start: JSize; Len: JSize; Buf: PJByte); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    GetCharArrayRegion: procedure(Env: PJNIEnv; AArray: JCharArray; Start: JSize; Len: JSize; Buf: PJChar); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    GetShortArrayRegion: procedure(Env: PJNIEnv; AArray: JShortArray; Start: JSize; Len: JSize; Buf: PJShort); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    GetIntArrayRegion: procedure(Env: PJNIEnv; AArray: JIntArray; Start: JSize; Len: JSize; Buf: PJInt); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    GetLongArrayRegion: procedure(Env: PJNIEnv; AArray: JLongArray; Start: JSize; Len: JSize; Buf: PJLong); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    GetFloatArrayRegion: procedure(Env: PJNIEnv; AArray: JFloatArray; Start: JSize; Len: JSize; Buf: PJFloat); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    GetDoubleArrayRegion: procedure(Env: PJNIEnv; AArray: JDoubleArray; Start: JSize; Len: JSize; Buf: PJDouble); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    GetBooleanArrayElements: function(Env: PJNIEnv; AArray: JBooleanArray; IsCopy: PJBoolean): PJBoolean; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    GetByteArrayElements: function(Env: PJNIEnv; AArray: JByteArray; IsCopy: PJBoolean): PJByte; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    GetCharArrayElements: function(Env: PJNIEnv; AArray: JCharArray; IsCopy: PJBoolean): PJChar; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    GetShortArrayElements: function(Env: PJNIEnv; AArray: JShortArray; IsCopy: PJBoolean): PJShort; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    GetIntArrayElements: function(Env: PJNIEnv; AArray: JIntArray; IsCopy: PJBoolean): PJInt; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    GetLongArrayElements: function(Env: PJNIEnv; AArray: JLongArray; IsCopy: PJBoolean): PJLong; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    GetFloatArrayElements: function(Env: PJNIEnv; AArray: JFloatArray; IsCopy: PJBoolean): PJFloat; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    GetDoubleArrayElements: function(Env: PJNIEnv; AArray: JDoubleArray; IsCopy: PJBoolean): PJDouble; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
-    SetBooleanArrayRegion: procedure(Env: PJNIEnv; AArray: JBooleanArray; Start: JSize; Len: JSize; Buf: PJBoolean); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    SetByteArrayRegion: procedure(Env: PJNIEnv; AArray: JByteArray; Start: JSize; Len: JSize; Buf: PJByte); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    SetCharArrayRegion: procedure(Env: PJNIEnv; AArray: JCharArray; Start: JSize; Len: JSize; Buf: PJChar); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    SetShortArrayRegion: procedure(Env: PJNIEnv; AArray: JShortArray; Start: JSize; Len: JSize; Buf: PJShort); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    SetIntArrayRegion: procedure(Env: PJNIEnv; AArray: JIntArray; Start: JSize; Len: JSize; Buf: PJInt); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    SetLongArrayRegion: procedure(Env: PJNIEnv; AArray: JLongArray; Start: JSize; Len: JSize; Buf: PJLong); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    SetFloatArrayRegion: procedure(Env: PJNIEnv; AArray: JFloatArray; Start: JSize; Len: JSize; Buf: PJFloat); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    SetDoubleArrayRegion: procedure(Env: PJNIEnv; AArray: JDoubleArray; Start: JSize; Len: JSize; Buf: PJDouble); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    ReleaseBooleanArrayElements: procedure(Env: PJNIEnv; AArray: JBooleanArray; Elems: PJBoolean; Mode: JInt); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    ReleaseByteArrayElements: procedure(Env: PJNIEnv; AArray: JByteArray; Elems: PJByte; Mode: JInt); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    ReleaseCharArrayElements: procedure(Env: PJNIEnv; AArray: JCharArray; Elems: PJChar; Mode: JInt); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    ReleaseShortArrayElements: procedure(Env: PJNIEnv; AArray: JShortArray; Elems: PJShort; Mode: JInt); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    ReleaseIntArrayElements: procedure(Env: PJNIEnv; AArray: JIntArray; Elems: PJInt; Mode: JInt); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    ReleaseLongArrayElements: procedure(Env: PJNIEnv; AArray: JLongArray; Elems: PJLong; Mode: JInt); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    ReleaseFloatArrayElements: procedure(Env: PJNIEnv; AArray: JFloatArray; Elems: PJFloat; Mode: JInt); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    ReleaseDoubleArrayElements: procedure(Env: PJNIEnv; AArray: JDoubleArray; Elems: PJDouble; Mode: JInt); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
-    RegisterNatives: function(Env: PJNIEnv; AClass: JClass; const Methods: PJNINativeMethod; NMethods: JInt): JInt; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    UnregisterNatives: function(Env: PJNIEnv; AClass: JClass): JInt; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    GetBooleanArrayRegion: procedure(Env: PJNIEnv; AArray: JBooleanArray; Start: JSize; Len: JSize; Buf: PJBoolean); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    GetByteArrayRegion: procedure(Env: PJNIEnv; AArray: JByteArray; Start: JSize; Len: JSize; Buf: PJByte); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    GetCharArrayRegion: procedure(Env: PJNIEnv; AArray: JCharArray; Start: JSize; Len: JSize; Buf: PJChar); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    GetShortArrayRegion: procedure(Env: PJNIEnv; AArray: JShortArray; Start: JSize; Len: JSize; Buf: PJShort); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    GetIntArrayRegion: procedure(Env: PJNIEnv; AArray: JIntArray; Start: JSize; Len: JSize; Buf: PJInt); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    GetLongArrayRegion: procedure(Env: PJNIEnv; AArray: JLongArray; Start: JSize; Len: JSize; Buf: PJLong); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    GetFloatArrayRegion: procedure(Env: PJNIEnv; AArray: JFloatArray; Start: JSize; Len: JSize; Buf: PJFloat); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    GetDoubleArrayRegion: procedure(Env: PJNIEnv; AArray: JDoubleArray; Start: JSize; Len: JSize; Buf: PJDouble); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
-    MonitorEnter: function(Env: PJNIEnv; Obj: JObject): JInt; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    MonitorExit: function(Env: PJNIEnv; Obj: JObject): JInt; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    SetBooleanArrayRegion: procedure(Env: PJNIEnv; AArray: JBooleanArray; Start: JSize; Len: JSize; Buf: PJBoolean); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    SetByteArrayRegion: procedure(Env: PJNIEnv; AArray: JByteArray; Start: JSize; Len: JSize; Buf: PJByte); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    SetCharArrayRegion: procedure(Env: PJNIEnv; AArray: JCharArray; Start: JSize; Len: JSize; Buf: PJChar); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    SetShortArrayRegion: procedure(Env: PJNIEnv; AArray: JShortArray; Start: JSize; Len: JSize; Buf: PJShort); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    SetIntArrayRegion: procedure(Env: PJNIEnv; AArray: JIntArray; Start: JSize; Len: JSize; Buf: PJInt); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    SetLongArrayRegion: procedure(Env: PJNIEnv; AArray: JLongArray; Start: JSize; Len: JSize; Buf: PJLong); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    SetFloatArrayRegion: procedure(Env: PJNIEnv; AArray: JFloatArray; Start: JSize; Len: JSize; Buf: PJFloat); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    SetDoubleArrayRegion: procedure(Env: PJNIEnv; AArray: JDoubleArray; Start: JSize; Len: JSize; Buf: PJDouble); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
-    GetJavaVM: function(Env: PJNIEnv; var VM: JavaVM): JInt; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    RegisterNatives: function(Env: PJNIEnv; AClass: JClass; const Methods: PJNINativeMethod; NMethods: JInt): JInt; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    UnregisterNatives: function(Env: PJNIEnv; AClass: JClass): JInt; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+
+    MonitorEnter: function(Env: PJNIEnv; Obj: JObject): JInt; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    MonitorExit: function(Env: PJNIEnv; Obj: JObject): JInt; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+
+    GetJavaVM: function(Env: PJNIEnv; VM: PPJavaVM): JInt; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
     // String Operations
-    GetStringRegion: procedure(Env: PJNIEnv; Str: JString; Start: JSize; Len: JSize; Buf: PJChar); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    GetStringUTFRegion: procedure(Env: PJNIEnv; Str: JString; Start: JSize; Len: JSize; Buf: PAnsiChar); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    GetStringRegion: procedure(Env: PJNIEnv; Str: JString; Start: JSize; Len: JSize; Buf: PJChar); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    GetStringUTFRegion: procedure(Env: PJNIEnv; Str: JString; Start: JSize; Len: JSize; Buf: PAnsiChar); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
     // Array Operations
-    GetPrimitiveArrayCritical: function(Env: PJNIEnv; AArray: JArray; var IsCopy: JBoolean): Pointer; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    ReleasePrimitiveArrayCritical: procedure(Env: PJNIEnv; AArray: JArray; CArray: Pointer; Mode: JInt); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    GetPrimitiveArrayCritical: function(Env: PJNIEnv; AArray: JArray; IsCopy: PJBoolean): Pointer; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    ReleasePrimitiveArrayCritical: procedure(Env: PJNIEnv; AArray: JArray; CArray: Pointer; Mode: JInt); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
     // String Operations
-    GetStringCritical: function(Env: PJNIEnv; Str: JString; var IsCopy: JBoolean): PJChar; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    ReleaseStringCritical: procedure(Env: PJNIEnv; Str: JString; CString: PJChar); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    GetStringCritical: function(Env: PJNIEnv; Str: JString; IsCopy: PJBoolean): PJChar; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    ReleaseStringCritical: procedure(Env: PJNIEnv; Str: JString; CString: PJChar); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
     // Weak Global References
-    NewWeakGlobalRef: function(Env: PJNIEnv; Obj: JObject): JWeak; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    DeleteWeakGlobalRef: procedure(Env: PJNIEnv; Ref: JWeak); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    NewWeakGlobalRef: function(Env: PJNIEnv; Obj: JObject): JWeak; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    DeleteWeakGlobalRef: procedure(Env: PJNIEnv; Ref: JWeak); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
     // Exceptions
-    ExceptionCheck: function(Env: PJNIEnv): JBoolean; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    ExceptionCheck: function(Env: PJNIEnv): JBoolean; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+
+    // J2SDK1_4
+   NewDirectByteBuffer: function(Env: PJNIEnv; Address: Pointer; Capacity: JLong): JObject; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+   GetDirectBufferAddress: function(Env: PJNIEnv; Buf: JObject): Pointer; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+   GetDirectBufferCapacity: function(Env: PJNIEnv; Buf: JObject): JLong; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+
   end;
   {$EXTERNALSYM JNINativeInterface_}
 
@@ -542,7 +595,7 @@ type
   end;
   {$EXTERNALSYM JavaVMAttachArgs}
 
-  {$IFDEF WIN32}
+  {$IFDEF MSWINDOWS}
   TIOFile = Pointer; // (rom) for Kylix compatibility
   {$ENDIF}
 
@@ -559,9 +612,9 @@ type
     verifyMode: JInt;
     classpath: PAnsiChar;
 
-    vfprintf: function(FP: TIOFile; const Format: PAnsiChar; Args: va_list): JInt; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    exit: procedure(Code: JInt); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    abort: procedure; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    vfprintf: function(FP: TIOFile; const Format: PAnsiChar; Args: va_list): JInt; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    exit: procedure(Code: JInt); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    abort: procedure; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
     enableClassGC: JInt;
     enableVerboseGC: JInt;
@@ -584,31 +637,35 @@ type
     reserved1: Pointer;
     reserved2: Pointer;
 
-    DestroyJavaVM: function(PVM: PJavaVM): JInt; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    AttachCurrentThread: function(PVM: PJavaVM; PEnv: PPJNIEnv; Args: Pointer): JInt; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-    DetachCurrentThread: function(PVM: PJavaVM): JInt; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    DestroyJavaVM: function(PVM: PJavaVM): JInt; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    AttachCurrentThread: function(PVM: PJavaVM; PEnv: PPJNIEnv; Args: Pointer): JInt; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    DetachCurrentThread: function(PVM: PJavaVM): JInt; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
-    GetEnv: function(PVM: PJavaVM; PEnv: PPointer; Version: JInt): JInt; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+    GetEnv: function(PVM: PJavaVM; PEnv: PPJNIEnv; Version: JInt): JInt; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+
+    // J2SDK1_4
+    AttachCurrentThreadAsDaemon: function(PVM: PJavaVM; PEnv: PPJNIEnv; Args: PJavaVMAttachArgs): JInt; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+
   end;
   {$EXTERNALSYM JNIInvokeInterface_}
 
   // Defined by native libraries.
-  TJNI_OnLoad = function(PVM: PJavaVM; Reserved: Pointer): JInt; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-  TJNI_OnUnload = procedure(PVM: PJavaVM; Reserved: Pointer); {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+  TJNI_OnLoad = function(PVM: PJavaVM; Reserved: Pointer): JInt; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+  TJNI_OnUnload = procedure(PVM: PJavaVM; Reserved: Pointer); {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
 {$IFDEF DYNAMIC_LINKING}
 function JNI_GetDefaultJavaVMInitArgs(Args: PJDK1_1InitArgs; const JVMDLLFile: string): JInt;
 {$EXTERNALSYM JNI_GetDefaultJavaVMInitArgs}
-function JNI_CreateJavaVM(PJVM: PJavaVM; PEnv: PPointer; Args: Pointer; const JVMDLLFile: string): JInt;
+function JNI_CreateJavaVM(PJVM: PPJavaVM; PEnv: PPJNIEnv; Args: Pointer; const JVMDLLFile: string): JInt;
 {$EXTERNALSYM JNI_CreateJavaVM}
-function JNI_GetCreatedJavaVMs(PJVM: PJavaVM; JSize1: JSize; var JSize2: JSize; const JVMDLLFile: string): JInt;
+function JNI_GetCreatedJavaVMs(PJVM: PPJavaVM; JSize1: JSize; JSize2: PJSize; const JVMDLLFile: string): JInt;
 {$EXTERNALSYM JNI_GetCreatedJavaVMs}
 {$ELSE}
-function JNI_GetDefaultJavaVMInitArgs(Args: Pointer): JInt; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+function JNI_GetDefaultJavaVMInitArgs(Args: PJDK1_1InitArgs): JInt; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 {$EXTERNALSYM JNI_GetDefaultJavaVMInitArgs}
-function JNI_CreateJavaVM(PJVM: PJavaVM; PEnv: PPointer; Args: Pointer): JInt; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+function JNI_CreateJavaVM(PJVM: PPJavaVM; PEnv: PPJNIEnv; Args: Pointer): JInt; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 {$EXTERNALSYM JNI_CreateJavaVM}
-function JNI_GetCreatedJavaVMs(PJVM: PJavaVM; JSize1: JSize; var JSize2: JSize): JInt; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+function JNI_GetCreatedJavaVMs(PJVM: PPJavaVM; JSize1: JSize; JSize2: PJSize): JInt; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 {$EXTERNALSYM JNI_GetCreatedJavaVMs}
 {$ENDIF}
 
@@ -620,9 +677,9 @@ type
   EJNIError = class(Exception);
   EJNIUnsupportedMethodError = class(EJNIError);
 
-  TJNI_GetDefaultJavaVMInitArgs = function(Args: Pointer): JInt; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-  TJNI_CreateJavaVM = function(PJVM: PJavaVM; PEnv: PPointer; Args: Pointer): JInt; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
-  TJNI_GetCreatedJavaVMs = function(PJVM: PJavaVM; JSize1: JSize; var JSize2: JSize): JInt; {$IFDEF WIN32} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+  TJNI_GetDefaultJavaVMInitArgs = function(Args: PJDK1_1InitArgs): JInt; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+  TJNI_CreateJavaVM = function(PJVM: PPJavaVM; PEnv: PPJNIEnv; Args: Pointer): JInt; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
+  TJNI_GetCreatedJavaVMs = function(PJVM: PPJavaVM; JSize1: JSize; JSize2: PJSize): JInt; {$IFDEF MSWINDOWS} stdcall; {$ENDIF} {$IFDEF LINUX} cdecl; {$ENDIF}
 
   TJavaVM = class(TObject)
   private
@@ -632,8 +689,10 @@ type
     FJDK1_1InitArgs: JDK1_1InitArgs;
     FJVMDLLFile: string;
 
+    FMajorVersion: JInt;
+    FMinorVersion: JInt;
     FVersion: JInt;
-    {$IFDEF WIN32}
+    {$IFDEF MSWINDOWS}
     FDLLHandle: THandle;
     {$ENDIF}
     {$IFDEF LINUX}
@@ -646,12 +705,17 @@ type
     FJNI_CreateJavaVM:             TJNI_CreateJavaVM;
     FJNI_GetCreatedJavaVMs:        TJNI_GetCreatedJavaVMs;
 
+    function GetMajorVersion: JInt;
+    function GetMinorVersion: JInt;
     procedure SetVersion(const Value: JInt);
+    procedure VersionCheck(const FuncName: string; RequiredVersion: JInt);
   public
-    property JavaVM: PJavaVM read FJavaVM;
-    property Env: PJNIEnv read FEnv;
+    property JavaVM: PJavaVM read FJavaVM write FJavaVM;
+    property Env: PJNIEnv read FEnv write FEnv;
     property JDK1_1InitArgs: JDK1_1InitArgs read FJDK1_1InitArgs;
     property JDK1_2InitArgs: JavaVMInitArgs read FJavaVMInitArgs;
+    property MajorVersion: JInt read FMajorVersion;
+    property MinorVersion: JInt read FMinorVersion;
     property Version: JInt read FVersion write SetVersion;
 
     // Constructors
@@ -662,8 +726,14 @@ type
     destructor Destroy; override;
     function LoadVM(const Options: JDK1_1InitArgs): JInt; overload;
     function LoadVM(const Options: JavaVMInitArgs): JInt; overload;
-    function GetDefaultJavaVMInitArgs(Args: PJDK1_1InitArgs): JInt;
-    function GetCreatedJavaVMs(PJVM: PJavaVM; JSize1: JSize; var JSize2: JSize): JInt;
+    function GetDefaultJavaVMInitArgs(var Args: JDK1_1InitArgs): JInt;
+    function GetCreatedJavaVMs(PJVM: PPJavaVM; JSize1: JSize; var JSize2: JSize): JInt;
+
+    function DestroyJavaVM: JInt;
+    function AttachCurrentThread(Args: PJavaVMAttachArgs): JInt;
+    function DetachCurrentThread: JInt;
+    function GetEnv(Version: JInt): JInt;
+    function AttachCurrentThreadAsDaemon(Args: PJavaVMAttachArgs): JInt;
   end;
 
   TJNIEnv = class(TObject)
@@ -687,16 +757,27 @@ type
     constructor Create(AEnv: PJNIEnv);
 
     // Support methods
+    //*
     function ArgsToJValues(const Args: array of const): PJValue;
-    function JStringToString(JStr: JString): string;
-    function StringToJString(const AString: PAnsiChar): JString;
-    function UnicodeJStringToString(JStr: JString): string;
-    function StringToUnicodeJString(const AString: PAnsiChar): JString;
+    function JStringToString(JStr: JString): UTF8String;
+    function StringToJString(const AString: UTF8String): JString;
+    function UnicodeJStringToString(JStr: JString): RawByteString;
+    function StringToUnicodeJString(const AString: RawByteString): JString;
+
+    // Added By Aki Nieminen
+    function JStringToWideString(JStr: JString): UnicodeString;
+    function WideStringToJString(Const WStr: UnicodeString): JString;
+    function WideCharToJString(const WStr: PWideChar): JString;
+    function BytesToJByteArray(bytes: TByteDynArray): JByteArray;
+    function IntegersToJIntArray(arr: TIntegerDynArray): JIntArray;
+    procedure ThrowException(E: Exception);
+    function SetStringMethod(jc: JClass; jco: JObject; name: UTF8String; value: UnicodeString): boolean;
+    function SetIntMethod(jc: JClass; jco: JObject; name: UTF8String; value: Integer): boolean;
 
     // JNIEnv methods
     function GetVersion: JInt;
-    function DefineClass(const Name: PAnsiChar; Loader: JObject; const Buf: PJByte; Len: JSize): JClass;
-    function FindClass(const Name: PAnsiChar): JClass;
+    function DefineClass(const Name: UTF8String; Loader: JObject; const Buf: PJByte; Len: JSize): JClass;
+    function FindClass(const Name: UTF8String): JClass;
 
     // Reflection Support
     function FromReflectedMethod(Method: JObject): JMethodID;
@@ -710,11 +791,11 @@ type
     function ToReflectedField(AClass: JClass; FieldID: JFieldID; IsStatic: JBoolean): JObject;
 
     function Throw(Obj: JThrowable): JInt;
-    function ThrowNew(AClass: JClass; const Msg: PAnsiChar): JInt;
+    function ThrowNew(AClass: JClass; const Msg: UTF8String): JInt;
     function ExceptionOccurred: JThrowable;
     procedure ExceptionDescribe;
     procedure ExceptionClear;
-    procedure FatalError(const Msg: PAnsiChar);
+    procedure FatalError(const Msg: UTF8String);
 
     // Local Reference Management
     function PushLocalFrame(Capacity: JInt): JInt;
@@ -727,7 +808,7 @@ type
 
     // Local Reference Management
     function NewLocalRef(Ref: JObject): JObject;
-    function EnsureLocalCapacity(Capacity: JInt): JObject;
+    function EnsureLocalCapacity(Capacity: JInt): JInt;
 
     function AllocObject(AClass: JClass): JObject;
     function NewObject(AClass: JClass; MethodID: JMethodID; const Args: array of const): JObject;
@@ -737,7 +818,7 @@ type
     function GetObjectClass(Obj: JObject): JClass;
     function IsInstanceOf(Obj: JObject; AClass: JClass): JBoolean;
 
-    function GetMethodID(AClass: JClass; const Name: PAnsiChar; const Sig: PAnsiChar): JMethodID;
+    function GetMethodID(AClass: JClass; const Name: UTF8String; const Sig: UTF8String): JMethodID;
 
     function CallObjectMethod(Obj: JObject; MethodID: JMethodID; const Args: array of const): JObject;
     function CallObjectMethodV(Obj: JObject; MethodID: JMethodID; Args: va_list): JObject;
@@ -819,7 +900,7 @@ type
     procedure CallNonvirtualVoidMethodV(Obj: JObject; AClass: JClass; MethodID: JMethodID; Args: va_list);
     procedure CallNonvirtualVoidMethodA(Obj: JObject; AClass: JClass; MethodID: JMethodID; Args: PJValue);
 
-    function GetFieldID(AClass: JClass; const Name: PAnsiChar; const Sig: PAnsiChar): JFieldID;
+    function GetFieldID(AClass: JClass; const Name: UTF8String; const Sig: UTF8String): JFieldID;
 
     function GetObjectField(Obj: JObject; FieldID: JFieldID): JObject;
     function GetBooleanField(Obj: JObject; FieldID: JFieldID): JBoolean;
@@ -841,7 +922,7 @@ type
     procedure SetFloatField(Obj: JObject; FieldID: JFieldID; Val: JFloat);
     procedure SetDoubleField(Obj: JObject; FieldID: JFieldID; Val: JDouble);
 
-    function GetStaticMethodID(AClass: JClass; const Name: PAnsiChar; const Sig: PAnsiChar): JMethodID;
+    function GetStaticMethodID(AClass: JClass; const Name: UTF8String; const Sig: UTF8String): JMethodID;
 
     function CallStaticObjectMethod(AClass: JClass; MethodID: JMethodID; const Args: array of const): JObject;
     function CallStaticObjectMethodV(AClass: JClass; MethodID: JMethodID; Args: va_list): JObject;
@@ -883,7 +964,7 @@ type
     procedure CallStaticVoidMethodV(AClass: JClass; MethodID: JMethodID; Args: va_list);
     procedure CallStaticVoidMethodA(AClass: JClass; MethodID: JMethodID; Args: PJValue);
 
-    function GetStaticFieldID(AClass: JClass; const Name: PAnsiChar; const Sig: PAnsiChar): JFieldID;
+    function GetStaticFieldID(AClass: JClass; const Name: UTF8String; const Sig: UTF8String): JFieldID;
     function GetStaticObjectField(AClass: JClass; FieldID: JFieldID): JObject;
     function GetStaticBooleanField(AClass: JClass; FieldID: JFieldID): JBoolean;
     function GetStaticByteField(AClass: JClass; FieldID: JFieldID): JByte;
@@ -991,19 +1072,51 @@ type
 
     // Exceptions
     function ExceptionCheck: JBoolean;
+
+    // J2SDK1_4
+    function NewDirectByteBuffer(Address: Pointer; Capacity: JLong): JObject;
+    function GetDirectBufferAddress(Buf: JObject): Pointer;
+    function GetDirectBufferCapacity(Buf: JObject): JLong;
   end;
 
 {$IFDEF DYNAMIC_LINKING}
-function LoadJVM(const Filename: string): Boolean;
+procedure LoadJVM(const Filename: string);
 function UnloadJVM: Boolean;
 function JVMIsLoaded: Boolean;
 {$ENDIF}
+
+
+{ ******************************************}
+{ static helper functions                   }
+{ ******************************************}
+
+procedure JNI_ThrowException(Env: PJNIEnv; E: Exception);
+
+{ Convert JavaJNIString to WideString.
+  This is a copy of TJNIEnv.JStringToWideString function
+  allowing convertion without TJNIEnv instantiation.
+}
+function JNI_JStringToWideString(Env: PJNIEnv; JStr: JString): UnicodeString; forward;
+
+{ Convert WideString to JavaJNIString
+  This is a copy of TJNIEnv.WideStringToJString function
+  allowing convertion without TJNIEnv instantiation.
+}
+function JNI_WideStringToJString(Env: PJNIEnv; const WStr: UnicodeString): JString;  forward;
+function JNI_WideCharToJString(Env: PJNIEnv; Const WStr: PWideChar): JString; forward;
+
+{ Convert byte array to JByteArray }
+function JNI_BytesToJByteArray(Env: PJNIEnv; Bytes: TByteDynArray): JByteArray; forward;
+function JNI_IntegersToJIntArray(Env: PJNIEnv; arr: TIntegerDynArray): JIntArray; forward;
+
+{ ******************************************}
+{ ******************************************}
 
 implementation
 
 {$IFNDEF DYNAMIC_LINKING}
 const
-  {$IFDEF WIN32}
+  {$IFDEF MSWINDOWS}
     {$IFDEF JDK1_1}
     JvmModuleName = 'javai.dll';
     {$ELSE}
@@ -1021,17 +1134,17 @@ function JNI_GetCreatedJavaVMs; external JvmModuleName name 'JNI_GetCreatedJavaV
 {$ELSE}
 
 var
-  {$IFDEF WIN32}
-  JVMHandle: THandle;
+  {$IFDEF MSWINDOWS}
+  JVMHandle: THandle = 0;
   {$ENDIF}
   {$IFDEF LINUX}
-  JVMHandle: Pointer;
+  JVMHandle: Pointer = nil;
   {$ENDIF}
-  CreateJavaVM: TJNI_CreateJavaVM;
-  GetCreatedJavaVMs: TJNI_GetCreatedJavaVMs;
-  GetDefaultJavaVMInitArgs: TJNI_GetDefaultJavaVMInitArgs;
+  CreateJavaVM: TJNI_CreateJavaVM = nil;
+  GetCreatedJavaVMs: TJNI_GetCreatedJavaVMs = nil;
+  GetDefaultJavaVMInitArgs: TJNI_GetDefaultJavaVMInitArgs = nil;
 
-{$IFDEF WIN32}
+{$IFDEF MSWINDOWS}
 
 function JVMIsLoaded: Boolean;
 begin
@@ -1049,28 +1162,34 @@ begin
   GetDefaultJavaVMInitArgs := nil;
 end;
 
-function LoadJVM(const Filename: string): Boolean;
+procedure LoadJVM(const Filename: string);
 begin
-  Result := JVMIsLoaded;
-  if not Result then
+  if not JVMIsLoaded then
   begin
     JVMHandle := LoadLibrary(PChar(Filename));
-    if JVMIsLoaded then
-    begin
+    if not JVMIsLoaded then
+      raise EJVMError.CreateFmt('LoadLibrary failed trying to load %s', [Filename]);
+
+    try
       @CreateJavaVM := GetProcAddress(JVMHandle, 'JNI_CreateJavaVM');
+      if not Assigned(CreateJavaVM) then
+        raise EJVMError.CreateFmt('GetProcAddress failed to locate JNI_CreateJavaVM in library %s', [Filename]);
+
       @GetCreatedJavaVMs := GetProcAddress(JVMHandle, 'JNI_GetCreatedJavaVMs');
+      if not Assigned(GetCreatedJavaVMs) then
+        raise EJVMError.CreateFmt('GetProcAddress failed to locate JNI_GetCreatedJavaVMs in library %s', [Filename]);
+
       @GetDefaultJavaVMInitArgs := GetProcAddress(JVMHandle, 'JNI_GetDefaultJavaVMInitArgs');
-      Result := Assigned(CreateJavaVM) and Assigned(GetCreatedJavaVMs) and Assigned(GetDefaultJavaVMInitArgs);
-      if not Result then
-      begin
-        UnloadJVM;
-        raise EJVMError.CreateFmt('"%s" is not a valid JVM library', [Filename]);
-      end;
+      if not Assigned(GetDefaultJavaVMInitArgs) then
+        raise EJVMError.CreateFmt('GetProcAddress failed to locate JNI_GetDefaultJavaVMInitArgs in library %s', [Filename]);
+    except
+      UnloadJVM;
+      raise;
     end;
   end;
 end;
 
-{$ENDIF} // WIN32
+{$ENDIF} // MSWINDOWS
 
 {$IFDEF LINUX}
 
@@ -1090,60 +1209,51 @@ begin
   GetDefaultJavaVMInitArgs := nil;
 end;
 
-function LoadJVM(const Filename: string): Boolean;
+procedure LoadJVM(const Filename: string);
 begin
-  Result := JVMIsLoaded;
-  if not Result then
+  if not JVMIsLoaded then
   begin
     JVMHandle := dlopen(PChar(Filename), RTLD_NOW);
-    if JVMIsLoaded then
-    begin
+    if not JVMIsLoaded then
+      raise EJVMError.CreateFmt('dlopen failed trying to load %s', [Filename]);
+
+    try
       @CreateJavaVM := dlsym(JVMHandle, 'JNI_CreateJavaVM');
+      if not Assigned(CreateJavaVM) then
+        raise EJVMError.CreateFmt('dlsym failed to locate JNI_CreateJavaVM in library %s', [Filename]);
+
       @GetCreatedJavaVMs := dlsym(JVMHandle, 'JNI_GetCreatedJavaVMs');
+      if not Assigned(GetCreatedJavaVMs) then
+        raise EJVMError.CreateFmt('dlsym failed to locate JNI_GetCreatedJavaVMs in library %s', [Filename]);
+
       @GetDefaultJavaVMInitArgs := dlsym(JVMHandle, 'JNI_GetDefaultJavaVMInitArgs');
-      Result := Assigned(CreateJavaVM) and Assigned(GetCreatedJavaVMs) and Assigned(GetDefaultJavaVMInitArgs);
-      if not Result then
-      begin
-        UnloadJVM;
-        raise EJVMError.CreateFmt('"%s" is not a valid JVM library', [Filename]);
-      end;
+      if not Assigned(GetDefaultJavaVMInitArgs) then
+        raise EJVMError.CreateFmt('dlsym failed to locate JNI_GetDefaultJavaVMInitArgs in library %s', [Filename]);
+    except
+      UnloadJVM;
+      raise;
     end;
   end;
 end;
 
 {$ENDIF} // LINUX
 
-function JNI_CreateJavaVM(PJVM: PJavaVM; PEnv: PPointer; Args: Pointer; const JVMDLLFile: string): JInt;
+function JNI_CreateJavaVM(PJVM: PPJavaVM; PEnv: PPJNIEnv; Args: Pointer; const JVMDLLFile: string): JInt;
 begin
-  if not JVMIsLoaded then
-    LoadJVM(JVMDLLFile);
-
-  if JVMIsLoaded then
-    Result := CreateJavaVM(PJVM, PEnv, Args)
-  else
-    Result := JNI_ENOJAVA;
+  LoadJVM(JVMDLLFile);
+  Result := CreateJavaVM(PJVM, PEnv, Args);
 end;
 
-function JNI_GetCreatedJavaVMs(PJVM: PJavaVM; JSize1: JSize; var JSize2: JSize; const JVMDLLFile: string): JInt;
+function JNI_GetCreatedJavaVMs(PJVM: PPJavaVM; JSize1: JSize; JSize2: PJSize; const JVMDLLFile: string): JInt;
 begin
-  if not JVMIsLoaded then
-    LoadJVM(JVMDLLFile);
-
-  if JVMIsLoaded then
-    Result := GetCreatedJavaVMs(PJVM, JSize1, JSize2)
-  else
-    Result := JNI_ENOJAVA;
+  LoadJVM(JVMDLLFile);
+  Result := GetCreatedJavaVMs(PJVM, JSize1, JSize2);
 end;
 
 function JNI_GetDefaultJavaVMInitArgs(Args: PJDK1_1InitArgs; const JVMDLLFile: string): JInt;
 begin
-  if not JVMIsLoaded then
-    LoadJVM(JVMDLLFile);
-
-  if JVMIsLoaded then
-    Result := GetDefaultJavaVMInitArgs(Args)
-  else
-    Result := JNI_ENOJAVA;
+  LoadJVM(JVMDLLFile);
+  Result := GetDefaultJavaVMInitArgs(Args);
 end;
 
 {$ENDIF} // DYNAMIC_LINKING defined
@@ -1157,17 +1267,25 @@ begin
   for I := 0 to High(Args) do
     case Args[I].VType of
       vtInteger:
-        FConvertedArgs[I].i := Args[I].VInteger;
+        FConvertedArgs[I].i := JInt(Args[I].VInteger);
       vtBoolean:
-        FConvertedArgs[I].z := Args[I].VBoolean;
+        FConvertedArgs[I].z := JBoolean(Args[I].VBoolean);
       vtWideChar:
-        FConvertedArgs[I].c := Args[I].VWideChar;
+        FConvertedArgs[I].c := JChar(Args[I].VWideChar);
       vtInt64:
-        FConvertedArgs[I].j := Args[I].VInt64^;
-      vtPointer, vtObject:
+        FConvertedArgs[I].j := JLong(Args[I].VInt64^);
+      vtPointer:
+        FConvertedArgs[I].l := Args[I].VPointer;
+      vtObject:
         FConvertedArgs[I].l := JObject(Args[I].VObject);
       vtAnsiString:
-        FConvertedArgs[I].l := StringToJString(Args[I].VAnsiString);
+        FConvertedArgs[I].l := StringToJString(UTF8String(PAnsiString(Args[I].VAnsiString)));
+      vtWideString:
+        FConvertedArgs[I].l := WideStringToJString(PWideChar(PWideString(Args[I].VWideString)));
+     {$IFDEF HAS_UNICODESTRING}
+      vtUnicodeString:
+        FConvertedArgs[I].l := WideStringToJString(PWideChar(PUnicodeString(Args[I].VUnicodeString)));
+     {$ENDIF}
       vtExtended:
         FConvertedArgs[I].d := Args[I].VExtended^; // Extended to Double (we lose Floats here)
     else
@@ -1186,20 +1304,26 @@ begin
   FVersion      := GetVersion;
 end;
 
-function TJNIEnv.StringToJString(const AString: PAnsiChar): JString;
+{ Wrap native exception to java.lang.Exception }
+procedure TJNIEnv.ThrowException(E: Exception);
 begin
-  Result := Env^.NewStringUTF(Env, PChar(AString));
+   JNI_ThrowException(FEnv, E);
 end;
 
-function TJNIEnv.StringToUnicodeJString(const AString: PAnsiChar): JString;
+{ UTF8AnsiString to JString }
+function TJNIEnv.StringToJString(const AString: UTF8String): JString;
 begin
-  Result := Env^.NewString(Env, PJChar(AString), Length(AString));
+  Result := Env^.NewStringUTF(Env, PAnsiChar(AString));
 end;
 
-function TJNIEnv.JStringToString(JStr: JString): string;
+function TJNIEnv.StringToUnicodeJString(const AString: RawByteString): JString;
+begin
+  Result := Env^.NewString(Env, PJChar(PAnsiChar(AString)), Length(AString) div SizeOf(WideChar));
+end;
+
+function TJNIEnv.JStringToString(JStr: JString): UTF8String;
 var
-  IsCopy: JBoolean;
-  Chars: PChar;
+  Chars: PAnsiChar;
 begin
   if JStr = nil then
   begin
@@ -1207,19 +1331,18 @@ begin
     Exit;
   end;
 
-  Chars := Env^.GetStringUTFChars(Env, JStr, IsCopy);
+  Chars := Env^.GetStringUTFChars(Env, JStr, nil);
   if Chars = nil then
     Result := ''
   else
   begin
-    Result := string(Chars);
+    SetString(Result, Chars, Env^.GetStringUTFLength(Env, JStr));
     Env^.ReleaseStringUTFChars(Env, JStr, Chars);
   end;
 end;
 
-function TJNIEnv.UnicodeJStringToString(JStr: JString): string;
+function TJNIEnv.UnicodeJStringToString(JStr: JString): RawByteString;
 var
-  IsCopy: JBoolean;
   Chars: PJChar;
 begin
   if JStr = nil then
@@ -1228,15 +1351,73 @@ begin
     Exit;
   end;
 
-  Chars := Env^.GetStringChars(Env, JStr, IsCopy);
+  Chars := Env^.GetStringChars(Env, JStr, nil);
   if Chars = nil then
     Result := ''
   else
   begin
-    Result := string(Chars);
+    SetString(Result, PAnsiChar(Chars), Env^.GetStringLength(Env, JStr) * SizeOf(WideChar));
+    {$IFDEF HAS_RAWBYTESTRING}
+    SetCodePage(Result, 1200, False);
+    {$ENDIF}
     Env^.ReleaseStringChars(Env, JStr, Chars);
   end;
 end;
+
+function TJNIEnv.JStringToWideString(JStr: JString): UnicodeString;
+begin
+  Result := JNI_JStringToWideString(FEnv, Jstr);
+end;
+
+function TJNIEnv.WideStringToJString(const WStr: UnicodeString): JString;
+begin
+  Result := JNI_WideStringToJString(FEnv, WStr);
+end;
+
+function TJNIEnv.WideCharToJString(const WStr: PWideChar): JString;
+begin
+  Result := JNI_WideStringToJString(FEnv, WStr);
+end;
+
+{ Convert byte array to JByteArray }
+function TJNIEnv.BytesToJByteArray(bytes: TByteDynArray): JByteArray;
+begin
+   Result := JNI_BytesToJByteArray(FEnv, bytes);
+end;
+
+{ Convert integer array to JIntArray }
+function TJNIEnv.IntegersToJIntArray(arr: TIntegerDynArray): JIntArray;
+begin
+   Result := JNI_IntegersToJIntArray(FEnv, arr);
+end;
+
+{ call "public void setName(String value)" }
+function TJNIEnv.SetStringMethod(jc: JClass; jco: JObject; name: UTF8String; value: UnicodeString): boolean;
+var
+   mId: JMethodID;
+   tmpObj: JObject;
+begin
+   Result := False;
+   mId := self.GetMethodID(jc, PAnsiChar(name), '(Ljava/lang/String;)V');
+   If not Assigned(mId) then Exit;
+   tmpObj := self.WideStringToJString(value);
+   self.CallVoidMethodV(jco, mId, @tmpObj);
+   Result := True;
+end;
+
+{ Call "public void setName(int value)" }
+function TJNIEnv.SetIntMethod(jc: JClass; jco: JObject; name: UTF8String; value: Integer): boolean;
+var
+   mId: JMethodID;
+begin
+   Result := False;
+   mId := self.GetMethodID(jc, PAnsiChar(name), '(I)V');
+   If not Assigned(mId) then Exit;
+   self.CallVoidMethodV(jco, mId, @value);
+   Result := True;
+end;
+
+
 
 function TJNIEnv.GetMajorVersion: JInt;
 begin
@@ -1260,8 +1441,11 @@ begin
 end;
 
 procedure TJNIEnv.CallVoidMethod(Obj: JObject; MethodID: JMethodID; const Args: array of const);
+var
+  Values: PJValue;
 begin
-  Env^.CallVoidMethodA(Env, Obj, MethodID, ArgsToJValues(Args));
+  Values := ArgsToJValues(Args);
+  Env^.CallVoidMethodA(Env, Obj, MethodID, Values);
 end;
 
 function TJNIEnv.AllocObject(AClass: JClass): JObject;
@@ -1714,9 +1898,9 @@ begin
   Env^.CallVoidMethodV(Env, Obj, MethodID, Args);
 end;
 
-function TJNIEnv.DefineClass(const Name: PAnsiChar; Loader: JObject; const Buf: PJByte; Len: JSize): JClass;
+function TJNIEnv.DefineClass(const Name: UTF8String; Loader: JObject; const Buf: PJByte; Len: JSize): JClass;
 begin
-  Result := Env^.DefineClass(Env, Name, Loader, Buf, Len);
+  Result := Env^.DefineClass(Env, PAnsiChar(Name), Loader, Buf, Len);
 end;
 
 procedure TJNIEnv.DeleteGlobalRef(GRef: JObject);
@@ -1744,14 +1928,14 @@ begin
   Result := Env^.ExceptionOccurred(Env);
 end;
 
-procedure TJNIEnv.FatalError(const Msg: PAnsiChar);
+procedure TJNIEnv.FatalError(const Msg: UTF8String);
 begin
-  Env^.FatalError(Env, Msg);
+  Env^.FatalError(Env, PAnsiChar(Msg));
 end;
 
-function TJNIEnv.FindClass(const Name: PAnsiChar): JClass;
+function TJNIEnv.FindClass(const Name: UTF8String): JClass;
 begin
-  Result := Env^.FindClass(Env, Name);
+  Result := Env^.FindClass(Env, PAnsiChar(Name));
 end;
 
 function TJNIEnv.GetArrayLength(AArray: JArray): JSize;
@@ -1761,7 +1945,7 @@ end;
 
 function TJNIEnv.GetBooleanArrayElements(AArray: JBooleanArray; var IsCopy: JBoolean): PJBoolean;
 begin
-  Result := Env^.GetBooleanArrayElements(Env, AArray, IsCopy);
+  Result := Env^.GetBooleanArrayElements(Env, AArray, @IsCopy);
 end;
 
 procedure TJNIEnv.GetBooleanArrayRegion(AArray: JBooleanArray; Start, Len: JSize; Buf: PJBoolean);
@@ -1776,7 +1960,7 @@ end;
 
 function TJNIEnv.GetByteArrayElements(AArray: JByteArray; var IsCopy: JBoolean): PJByte;
 begin
-  Result := Env^.GetByteArrayElements(Env, AArray, IsCopy);
+  Result := Env^.GetByteArrayElements(Env, AArray, @IsCopy);
 end;
 
 procedure TJNIEnv.GetByteArrayRegion(AArray: JByteArray; Start, Len: JSize; Buf: PJByte);
@@ -1791,7 +1975,7 @@ end;
 
 function TJNIEnv.GetCharArrayElements(AArray: JCharArray; var IsCopy: JBoolean): PJChar;
 begin
-  Result := Env^.GetCharArrayElements(Env, AArray, IsCopy);
+  Result := Env^.GetCharArrayElements(Env, AArray, @IsCopy);
 end;
 
 procedure TJNIEnv.GetCharArrayRegion(AArray: JCharArray; Start, Len: JSize; Buf: PJChar);
@@ -1806,7 +1990,7 @@ end;
 
 function TJNIEnv.GetDoubleArrayElements(AArray: JDoubleArray; var IsCopy: JBoolean): PJDouble;
 begin
-  Result := Env^.GetDoubleArrayElements(Env, AArray, IsCopy);
+  Result := Env^.GetDoubleArrayElements(Env, AArray, @IsCopy);
 end;
 
 procedure TJNIEnv.GetDoubleArrayRegion(AArray: JDoubleArray; Start, Len: JSize; Buf: PJDouble);
@@ -1819,14 +2003,14 @@ begin
   Result := Env^.GetDoubleField(Env, Obj, FieldID);
 end;
 
-function TJNIEnv.GetFieldID(AClass: JClass; const Name, Sig: PAnsiChar): JFieldID;
+function TJNIEnv.GetFieldID(AClass: JClass; const Name, Sig: UTF8String): JFieldID;
 begin
-  Result := Env^.GetFieldID(Env, AClass, Name, Sig);
+  Result := Env^.GetFieldID(Env, AClass, PAnsiChar(Name), PAnsiChar(Sig));
 end;
 
 function TJNIEnv.GetFloatArrayElements(AArray: JFloatArray; var IsCopy: JBoolean): PJFloat;
 begin
-  Result := Env^.GetFloatArrayElements(Env, AArray, IsCopy);
+  Result := Env^.GetFloatArrayElements(Env, AArray, @IsCopy);
 end;
 
 procedure TJNIEnv.GetFloatArrayRegion(AArray: JFloatArray; Start, Len: JSize; Buf: PJFloat);
@@ -1841,7 +2025,7 @@ end;
 
 function TJNIEnv.GetIntArrayElements(AArray: JIntArray; var IsCopy: JBoolean): PJInt;
 begin
-  Result := Env^.GetIntArrayElements(Env, AArray, IsCopy);
+  Result := Env^.GetIntArrayElements(Env, AArray, @IsCopy);
 end;
 
 procedure TJNIEnv.GetIntArrayRegion(AArray: JIntArray; Start, Len: JSize; Buf: PJInt);
@@ -1856,12 +2040,12 @@ end;
 
 function TJNIEnv.GetJavaVM(var VM: JavaVM): JInt;
 begin
-  Result := Env^.GetJavaVM(Env, VM);
+  Result := Env^.GetJavaVM(Env, @VM);
 end;
 
 function TJNIEnv.GetLongArrayElements(AArray: JLongArray; var IsCopy: JBoolean): PJLong;
 begin
-  Result := Env^.GetLongArrayElements(Env, AArray, IsCopy);
+  Result := Env^.GetLongArrayElements(Env, AArray, @IsCopy);
 end;
 
 procedure TJNIEnv.GetLongArrayRegion(AArray: JLongArray; Start, Len: JSize; Buf: PJLong);
@@ -1874,9 +2058,9 @@ begin
   Result := Env^.GetLongField(Env, Obj, FieldID);
 end;
 
-function TJNIEnv.GetMethodID(AClass: JClass; const Name, Sig: PAnsiChar): JMethodID;
+function TJNIEnv.GetMethodID(AClass: JClass; const Name, Sig: UTF8String): JMethodID;
 begin
-  Result := Env^.GetMethodID(Env, AClass, Name, Sig);
+  Result := Env^.GetMethodID(Env, AClass, PAnsiChar(Name), PAnsiChar(Sig));
 end;
 
 function TJNIEnv.GetObjectArrayElement(AArray: JObjectArray; Index: JSize): JObject;
@@ -1896,7 +2080,7 @@ end;
 
 function TJNIEnv.GetShortArrayElements(AArray: JShortArray; var IsCopy: JBoolean): PJShort;
 begin
-  Result := Env^.GetShortArrayElements(Env, AArray, IsCopy);
+  Result := Env^.GetShortArrayElements(Env, AArray, @IsCopy);
 end;
 
 procedure TJNIEnv.GetShortArrayRegion(AArray: JShortArray; Start, Len: JSize; Buf: PJShort);
@@ -1929,9 +2113,9 @@ begin
   Result := Env^.GetStaticDoubleField(Env, AClass, FieldID);
 end;
 
-function TJNIEnv.GetStaticFieldID(AClass: JClass; const Name, Sig: PAnsiChar): JFieldID;
+function TJNIEnv.GetStaticFieldID(AClass: JClass; const Name, Sig: UTF8String): JFieldID;
 begin
-  Result := Env^.GetStaticFieldID(Env, AClass, Name, Sig);
+  Result := Env^.GetStaticFieldID(Env, AClass, PAnsiChar(Name), PAnsiChar(Sig));
 end;
 
 function TJNIEnv.GetStaticFloatField(AClass: JClass; FieldID: JFieldID): JFloat;
@@ -1949,9 +2133,9 @@ begin
   Result := Env^.GetStaticLongField(Env, AClass, FieldID);
 end;
 
-function TJNIEnv.GetStaticMethodID(AClass: JClass; const Name, Sig: PAnsiChar): JMethodID;
+function TJNIEnv.GetStaticMethodID(AClass: JClass; const Name, Sig: UTF8String): JMethodID;
 begin
-  Result := Env^.GetStaticMethodID(Env, AClass, Name, Sig);
+  Result := Env^.GetStaticMethodID(Env, AClass, PAnsiChar(Name), PAnsiChar(Sig));
 end;
 
 function TJNIEnv.GetStaticObjectField(AClass: JClass; FieldID: JFieldID): JObject;
@@ -1966,7 +2150,7 @@ end;
 
 function TJNIEnv.GetStringChars(Str: JString; var IsCopy: JBoolean): PJChar;
 begin
-  Result := Env^.GetStringChars(Env, Str, IsCopy);
+  Result := Env^.GetStringChars(Env, Str, @IsCopy);
 end;
 
 function TJNIEnv.GetStringLength(Str: JString): JSize;
@@ -1976,7 +2160,7 @@ end;
 
 function TJNIEnv.GetStringUTFChars(Str: JString; var IsCopy: JBoolean): PAnsiChar;
 begin
-  Result := Env^.GetStringUTFChars(Env, Str, IsCopy);
+  Result := Env^.GetStringUTFChars(Env, Str, @IsCopy);
 end;
 
 function TJNIEnv.GetStringUTFLength(Str: JString): JSize;
@@ -2056,7 +2240,7 @@ end;
 
 function TJNIEnv.NewObject(AClass: JClass; MethodID: JMethodID; const Args: array of const): JObject;
 begin
-  Result := nil;
+  Result := Env^.NewObjectA(Env, AClass, MethodID, ArgsToJValues(Args));
 end;
 
 function TJNIEnv.NewObjectA(AClass: JClass; MethodID: JMethodID; Args: PJValue): JObject;
@@ -2289,9 +2473,9 @@ begin
   Result := Env^.Throw(Env, Obj);
 end;
 
-function TJNIEnv.ThrowNew(AClass: JClass; const Msg: PAnsiChar): JInt;
+function TJNIEnv.ThrowNew(AClass: JClass; const Msg: UTF8String): JInt;
 begin
-  Result := Env^.ThrowNew(Env, AClass, Msg);
+  Result := Env^.ThrowNew(Env, AClass, PAnsiChar(Msg));
 end;
 
 procedure TJNIEnv.DeleteWeakGlobalRef(Ref: JWeak);
@@ -2300,7 +2484,7 @@ begin
   Env^.DeleteWeakGlobalRef(Env, Ref);
 end;
 
-function TJNIEnv.EnsureLocalCapacity(Capacity: JInt): JObject;
+function TJNIEnv.EnsureLocalCapacity(Capacity: JInt): JInt;
 begin
   Result := Env^.EnsureLocalCapacity(Env, Capacity);
 end;
@@ -2326,13 +2510,13 @@ end;
 function TJNIEnv.GetPrimitiveArrayCritical(AArray: JArray; var IsCopy: JBoolean): Pointer;
 begin
   VersionCheck('GetPrimitiveArrayCritical', JNI_VERSION_1_2);
-  Result := Env^.GetPrimitiveArrayCritical(Env, AArray, IsCopy);
+  Result := Env^.GetPrimitiveArrayCritical(Env, AArray, @IsCopy);
 end;
 
 function TJNIEnv.GetStringCritical(Str: JString; var IsCopy: JBoolean): PJChar;
 begin
   VersionCheck('GetStringCritical', JNI_VERSION_1_2);
-  Result := Env^.GetStringCritical(Env, Str, IsCopy);
+  Result := Env^.GetStringCritical(Env, Str, @IsCopy);
 end;
 
 procedure TJNIEnv.GetStringRegion(Str: JString; Start, Len: JSize; Buf: PJChar);
@@ -2395,31 +2579,49 @@ begin
   Result := Env^.ToReflectedMethod(Env, AClass, MethodID, IsStatic);
 end;
 
+function TJNIEnv.NewDirectByteBuffer(Address: Pointer; Capacity: JLong): JObject;
+begin
+  VersionCheck('NewDirectByteBuffer', JNI_VERSION_1_4);
+  Result := Env^.NewDirectByteBuffer(Env, Address, Capacity);
+end;
+
+function TJNIEnv.GetDirectBufferAddress(Buf: JObject): Pointer;
+begin
+  VersionCheck('GetDirectBufferAddress', JNI_VERSION_1_4);
+  Result := Env^.GetDirectBufferAddress(Env, Buf);
+end;
+
+function TJNIEnv.GetDirectBufferCapacity(Buf: JObject): JLong;
+begin
+  VersionCheck('GetDirectBufferCapacity', JNI_VERSION_1_4);
+  Result := Env^.GetDirectBufferCapacity(Env, Buf);
+end;
+
 { TJavaVM }
 constructor TJavaVM.Create;
 begin
   {$IFDEF DYNAMIC_LINKING}
     // We need to know which DLL to load if we're linking at runtime
-    raise Exception.Create('No JDK version specified');
+    raise EJVMError.Create('No JDK version specified');
   {$ELSE}
-    FJNI_GetDefaultJavaVMInitArgs := JNI_GetDefaultJavaVMInitArgs;
-    FJNI_CreateJavaVM := JNI_CreateJavaVM;
-    FJNI_GetCreatedJavaVMs := JNI_GetCreatedJavaVMs;
+    FJNI_GetDefaultJavaVMInitArgs := @JNI_GetDefaultJavaVMInitArgs;
+    FJNI_CreateJavaVM := @JNI_CreateJavaVM;
+    FJNI_GetCreatedJavaVMs := @JNI_GetCreatedJavaVMs;
     FIsInitialized := True;
   {$ENDIF}
 end;
 
-{$IFDEF WIN32}
+{$IFDEF MSWINDOWS}
 
 constructor TJavaVM.Create(JDKVersion: Integer);
 begin
   if JDKVersion = JNI_VERSION_1_1 then
     Create(JDKVersion, 'javai.dll')
   else
-  if JDKVersion = JNI_VERSION_1_2 then
+  if JDKVersion >= JNI_VERSION_1_2 then
     Create(JDKVersion, 'jvm.dll')
   else
-    raise Exception.Create('Unknown JDK Version');
+    raise EJVMError.Create('Unknown JDK Version');
 end;
 
 constructor TJavaVM.Create(JDKVersion: Integer; const JVMDLLFilename: string);
@@ -2430,30 +2632,28 @@ begin
 
   FJavaVM := nil;
   FEnv := nil;
+
   FDLLHandle := LoadLibrary(PChar(FJVMDLLFile));
   if FDLLHandle = 0 then
-    raise Exception.CreateFmt('LoadLibrary failed trying to load %s', [FJVMDLLFile]);
+    raise EJVMError.CreateFmt('LoadLibrary failed trying to load %s', [FJVMDLLFile]);
+  try
+    @FJNI_CreateJavaVM := GetProcAddress(FDLLHandle, 'JNI_CreateJavaVM');
+    if not Assigned(FJNI_CreateJavaVM) then
+      raise EJVMError.CreateFmt('GetProcAddress failed to locate JNI_CreateJavaVM in library %s', [FJVMDLLFile]);
 
-  @FJNI_CreateJavaVM := GetProcAddress(FDLLHandle, 'JNI_CreateJavaVM');
-  if not Assigned(FJNI_CreateJavaVM) then
-  begin
+    @FJNI_GetDefaultJavaVMInitArgs := GetProcAddress(FDLLHandle, 'JNI_GetDefaultJavaVMInitArgs');
+    if not Assigned(FJNI_GetDefaultJavaVMInitArgs) then
+      raise EJVMError.CreateFmt('GetProcAddress failed to locate JNI_GetDefaultJavaVMInitArgs in library %s', [FJVMDLLFile]);
+
+    @FJNI_GetCreatedJavaVMs := GetProcAddress(FDLLHandle, 'JNI_GetCreatedJavaVMs');
+    if not Assigned(FJNI_GetCreatedJavaVMs) then
+      raise EJVMError.CreateFmt('GetProcAddress failed to locate JNI_GetCreatedJavaVMs in library %s', [FJVMDLLFile]);
+  except
     FreeLibrary(FDLLHandle);
-    raise Exception.CreateFmt('GetProcAddress failed to locate JNI_CreateJavaVM in library %s', [FJVMDLLFile]);
+    FDLLHandle := 0;
+    raise;
   end;
 
-  @FJNI_GetDefaultJavaVMInitArgs := GetProcAddress(FDLLHandle, 'JNI_GetDefaultJavaVMInitArgs');
-  if not Assigned(FJNI_GetDefaultJavaVMInitArgs) then
-  begin
-    FreeLibrary(FDLLHandle);
-    raise Exception.CreateFmt('GetProcAddress failed to locate JNI_GetDefaultJavaVMInitArgs in library %s', [FJVMDLLFile]);
-  end;
-
-  @FJNI_GetCreatedJavaVMs := GetProcAddress(FDLLHandle, 'JNI_GetCreatedJavaVMs');
-  if not Assigned(FJNI_GetCreatedJavaVMs) then
-  begin
-    FreeLibrary(FDLLHandle);
-    raise Exception.CreateFmt('GetProcAddress failed to locate JNI_GetCreatedJavaVMs in library %s', [FJVMDLLFile]);
-  end;
   FIsInitialized := True;
 end;
 
@@ -2464,7 +2664,7 @@ begin
   inherited Destroy;
 end;
 
-{$ENDIF} // Win32
+{$ENDIF} // MSWINDOWS
 
 {$IFDEF LINUX}
 
@@ -2473,10 +2673,10 @@ begin
   if JDKVersion = JNI_VERSION_1_1 then
     Create(JDKVersion, 'libjava.so')
   else
-  if JDKVersion = JNI_VERSION_1_2 then
+  if JDKVersion >= JNI_VERSION_1_2 then
     Create(JDKVersion, 'libjvm.so')
   else
-    raise Exception.Create('Unknown JDK Version');
+    raise EJVMError.Create('Unknown JDK Version');
 end;
 
 constructor TJavaVM.Create(JDKVersion: Integer; const JVMDLLFilename: string);
@@ -2487,29 +2687,28 @@ begin
 
   FJavaVM := nil;
   FEnv := nil;
+
   FDLLHandle := dlopen(PChar(FJVMDLLFile), RTLD_NOW);
   if FDLLHandle = nil then
-    raise Exception.CreateFmt('dlopen failed trying to load %s', [FJVMDLLFile]);
+    raise EJVMError.CreateFmt('dlopen failed trying to load %s', [FJVMDLLFile]);
+  try
+    @FJNI_CreateJavaVM := dlsym(FDLLHandle, 'JNI_CreateJavaVM');
+    if not Assigned(FJNI_CreateJavaVM) then
+      raise Exception.CreateFmt('dlsym failed to locate JNI_CreateJavaVM in library %s', [FJVMDLLFile]);
 
-  @FJNI_CreateJavaVM := dlsym(FDLLHandle, 'JNI_CreateJavaVM');
-  if not Assigned(FJNI_CreateJavaVM) then
-  begin
+    @FJNI_GetDefaultJavaVMInitArgs := dlsym(FDLLHandle, 'JNI_GetDefaultJavaVMInitArgs');
+    if not Assigned(FJNI_GetDefaultJavaVMInitArgs) then
+      raise Exception.CreateFmt('dlsym failed to locate JNI_GetDefaultJavaVMInitArgs in library %s', [FJVMDLLFile]);
+
+    @FJNI_GetCreatedJavaVMs := dlsym(FDLLHandle, 'JNI_GetCreatedJavaVMs');
+    if not Assigned(FJNI_GetCreatedJavaVMs) then
+      raise Exception.CreateFmt('dlsym failed to locate JNI_GetCreatedJavaVMs in library %s', [FJVMDLLFile]);
+  except
     dlclose(FDLLHandle);
-    raise Exception.CreateFmt('dlsym failed to locate JNI_CreateJavaVM in library %s', [FJVMDLLFile]);
+    FDLLHandle := nil;
+    raise;
   end;
 
-  @FJNI_GetDefaultJavaVMInitArgs := dlsym(FDLLHandle, 'JNI_GetDefaultJavaVMInitArgs');
-  if not Assigned(FJNI_GetDefaultJavaVMInitArgs) then
-  begin
-    dlclose(FDLLHandle);
-    raise Exception.CreateFmt('dlsym failed to locate JNI_GetDefaultJavaVMInitArgs in library %s', [FJVMDLLFile]);
-  end;
-  @FJNI_GetCreatedJavaVMs := dlsym(FDLLHandle, 'JNI_GetCreatedJavaVMs');
-  if not Assigned(FJNI_GetCreatedJavaVMs) then
-  begin
-    dlclose(FDLLHandle);
-    raise Exception.CreateFmt('dlsym failed to locate JNI_GetCreatedJavaVMs in library %s', [FJVMDLLFile]);
-  end;
   FIsInitialized := True;
 end;
 
@@ -2522,42 +2721,190 @@ end;
 
 {$ENDIF} // LINUX
 
-function TJavaVM.GetCreatedJavaVMs(PJVM: PJavaVM; JSize1: JSize; var JSize2: JSize): JInt;
+function TJavaVM.GetCreatedJavaVMs(PJVM: PPJavaVM; JSize1: JSize; var JSize2: JSize): JInt;
 begin
   if not FIsInitialized then
-    raise Exception.Create('JavaVM has not been initialized');
-  Result := FJNI_GetCreatedJavaVMs(PJVM, JSize1, JSize2);
+    raise EJVMError.Create('JavaVM has not been initialized');
+  Result := FJNI_GetCreatedJavaVMs(PJVM, JSize1, @JSize2);
 end;
 
-function TJavaVM.GetDefaultJavaVMInitArgs(Args: PJDK1_1InitArgs): JInt;
+function TJavaVM.GetDefaultJavaVMInitArgs(var Args: JDK1_1InitArgs): JInt;
 begin
   if not FIsInitialized then
-    raise Exception.Create('JavaVM has not been initialized');
-  Result := FJNI_GetDefaultJavaVMInitArgs(Args)
+    raise EJVMError.Create('JavaVM has not been initialized');
+  Result := FJNI_GetDefaultJavaVMInitArgs(@Args);
 end;
 
 function TJavaVM.LoadVM(const Options: JDK1_1InitArgs): JInt;
 begin
+  if not FIsInitialized then
+    raise EJVMError.Create('JavaVM has not been initialized');
   FJDK1_1InitArgs := Options;
   Result := FJNI_CreateJavaVM(@FJavaVM, @FEnv, @FJDK1_1InitArgs)
 end;
 
 function TJavaVM.LoadVM(const Options: JavaVMInitArgs): JInt;
 begin
+  if not FIsInitialized then
+    raise EJVMError.Create('JavaVM has not been initialized');
   FJavaVMInitArgs := Options;
   Result := FJNI_CreateJavaVM(@FJavaVM, @FEnv, @FJavaVMInitArgs);
+end;
+
+function TJavaVM.GetMajorVersion: JInt;
+begin
+  Result := FVersion shr 16;
+end;
+
+function TJavaVM.GetMinorVersion: JInt;
+begin
+  Result := FVersion mod 65536;
 end;
 
 procedure TJavaVM.SetVersion(const Value: JInt);
 begin
   FVersion := Value;
+  FMajorVersion := GetMajorVersion;
+  FMinorVersion := GetMinorVersion;
 end;
+
+procedure TJavaVM.VersionCheck(const FuncName: string; RequiredVersion: JInt);
+begin
+  if Version < RequiredVersion then
+    raise EJNIUnsupportedMethodError.CreateFmt('Method "%s" not supported in JDK %d.%d', [FuncName, MajorVersion, MinorVersion]);
+end;
+
+function TJavaVM.DestroyJavaVM: JInt;
+begin
+  if FJavaVM <> nil then begin
+    Result := FJavaVM^.DestroyJavaVM(FJavaVM);
+    if Result = JNI_OK then
+      FJavaVM := nil;
+  end else
+    Result := JNI_OK;
+end;
+
+function TJavaVM.AttachCurrentThread(Args: PJavaVMAttachArgs): JInt;
+begin
+  if FJavaVM = nil then
+    raise EJVMError.Create('JavaVM has not been loaded');
+  Result := FJavaVM^.AttachCurrentThread(FJavaVM, @FEnv, Args);
+end;
+
+function TJavaVM.DetachCurrentThread: JInt;
+begin
+  if FJavaVM = nil then
+    raise EJVMError.Create('JavaVM has not been loaded');
+  Result := FJavaVM^.DetachCurrentThread(FJavaVM);
+  if Result = JNI_OK then
+    FEnv := nil;
+end;
+
+function TJavaVM.GetEnv(Version: JInt): JInt;
+begin
+  if FJavaVM = nil then
+    raise EJVMError.Create('JavaVM has not been loaded');
+  Result := FJavaVM^.GetEnv(FJavaVM, @FEnv, Version);
+end;
+
+function TJavaVM.AttachCurrentThreadAsDaemon(Args: PJavaVMAttachArgs): JInt;
+begin
+  if FJavaVM = nil then
+    raise EJVMError.Create('JavaVM has not been loaded');
+  VersionCheck('AttachCurrentThreadAsDaemon', JNI_VERSION_1_4);
+  Result := FJavaVM^.AttachCurrentThreadAsDaemon(FJavaVM, @FEnv, Args);
+end;
+
+{**************************************}
+{**************************************}
+{** Static helper functions          **}
+{**************************************}
+{**************************************}
+
+{ Wrap native exception to java.lang.Exception }
+procedure JNI_ThrowException(Env: PJNIEnv; E: Exception);
+var
+   jc: JObject;
+begin
+   jc := Env^.FindClass(Env, 'java/lang/Exception');
+   Env^.ThrowNew(Env, jc, PAnsiChar(AnsiString(E.Message)));
+end;
+
+{ Convert JavaJNIString to WideString }
+{ allows conversion without TJNIEnv instance }
+function JNI_JStringToWideString(Env: PJNIEnv; JStr: JString): UnicodeString;
+var
+  Chars: PJChar;
+begin
+  if (JStr = nil) then begin
+    Result := '';
+    Exit;
+  end;
+
+  Chars := Env^.GetStringChars(Env, JStr, nil);
+  if (Chars = nil) then begin
+    Result := ''
+  end else begin
+    SetString(Result, PWideChar(Chars), Env^.GetStringLength(Env, JStr));
+    Env^.ReleaseStringChars(Env, JStr, Chars);
+  end;
+end;
+
+{ Convert WideString to JavaJNIString }
+{ allows conversion without TJNIEnv instance }
+function JNI_WideStringToJString(Env: PJNIEnv; Const WStr: UnicodeString): JString;
+begin
+  Result := Env^.NewString(Env, Pointer(WStr), Length(WStr));
+end;
+
+function JNI_WideCharToJString(Env: PJNIEnv; Const WStr: PWideChar): JString;
+begin
+  Result := JNI_WideStringToJString(Env, WStr);
+end;
+
+{ Convert byte array to JByteArray }
+function JNI_BytesToJByteArray(Env: PJNIEnv; Bytes: TByteDynArray): JByteArray;
+var
+   len: Cardinal;
+   byteArray: JByteArray;
+begin
+   if (bytes = nil) then begin
+      Result := nil;
+      Exit;
+   end;
+
+   len := High(Bytes)+1;
+   byteArray := Env^.NewByteArray(Env, Len);
+   Env^.SetByteArrayRegion(Env, byteArray, 0, len, @Bytes[0]);
+   Result := byteArray;
+end;
+
+{ Convert integer array to JIntArray }
+function JNI_IntegersToJIntArray(Env: PJNIEnv; arr: TIntegerDynArray): JIntArray;
+var
+   len: Cardinal;
+   intArray: JIntArray;
+begin
+   if (arr = nil) then begin
+      Result := nil;
+      Exit;
+   end;
+
+   len := High(arr)+1;
+   intArray := Env^.NewIntArray(Env, Len);
+   Env^.SetIntArrayRegion(Env, intArray, 0, len, @arr[0]);
+   Result := intArray;
+end;
+
+{**************************************}
+{**************************************}
+
 
 {$IFDEF DYNAMIC_LINKING}
 initialization
 
 finalization
-    UnloadJVM;
+  UnloadJVM;
 {$ENDIF}
 
 end.
