@@ -24,6 +24,8 @@ type
     constructor Create(host, ServerProgID, ServerClientHandle : string);
     // connect to server
     procedure connect; virtual;
+    // disconnect from server
+    procedure disconnect; virtual;
     // get ServerIf interface
     function getServerIf : IOPCServer;
     // get server status
@@ -68,6 +70,11 @@ begin
     on E:Exception do
       raise ConnectivityException.Create(ConnectivityExceptionText);
   end;
+end;
+
+procedure TCustomOPC.disconnect;
+begin
+  ServerIf := nil;
 end;
 
 function TCustomOPC.getServerStatus : boolean;

@@ -148,6 +148,14 @@ end;
 
 //------------------------------------------------------------------------------
 
+procedure Java_javafish_clients_opc_JCustomOpc_disconnectServer(PEnv: PJNIEnv;
+  Obj: JObject); stdcall;
+begin
+  aopc[GetInt(ID, PEnv, Obj)].disconnect;
+end;
+
+//------------------------------------------------------------------------------
+
 function Java_javafish_clients_opc_JCustomOpc_getStatus(PEnv: PJNIEnv;
   Obj: JObject) : JBoolean; stdcall;
 begin
@@ -749,6 +757,7 @@ exports
   Java_javafish_clients_opc_JCustomOpc_coInitializeNative,
   Java_javafish_clients_opc_JCustomOpc_coUninitializeNative,
   Java_javafish_clients_opc_JCustomOpc_connectServer,
+  Java_javafish_clients_opc_JCustomOpc_disconnectServer,
   Java_javafish_clients_opc_JCustomOpc_getStatus,
 
   // JOpcBrowser methods

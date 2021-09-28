@@ -90,25 +90,24 @@ begin
      args[0].l := JVM.StringToJString(PAnsiChar(AnsiString(VarToStr(varin))));
    end;
    varShortInt: begin
-     msyntax := '(I)V';
-     args[0].i := varin;
-   end;
-   varByte: begin
      msyntax := '(B)V';
      args[0].b := varin;
    end;
-   varWord: begin
+   varByte: begin
      msyntax := '(S)V';
      args[0].s := varin;
    end;
-   varLongWord: begin
+   varWord: begin
      msyntax := '(I)V';
      args[0].i := varin;
    end;
+   varLongWord: begin
+     msyntax := '(J)V';
+     args[0].j := varin;
+   end;
    varInt64: begin
-     // not supported -> string
-     msyntax := '(Ljava/lang/String;)V';
-     args[0].l := JVM.StringToJString(PAnsiChar(AnsiString(VarToStr(varin))));
+     msyntax := '(J)V';
+     args[0].j := varin;
    end;
    varStrArg: begin
      msyntax := '(Ljava/lang/String;)V';
@@ -146,7 +145,7 @@ end;
 
 function variantUpdate(PEnv: PJNIEnv; varin : JObject) : Variant;
 type
-  types = (VINTEGER, VFLOAT, VDOUBLE, VSTRING, VEMPTY, VNULL, VBOOLEAN,
+  types = (VLONG, VINTEGER, VFLOAT, VDOUBLE, VSTRING, VEMPTY, VNULL, VBOOLEAN,
            VVARIANT, VBYTE, VSHORT, VARRAY);
 var
   JVM        : TJNIEnv;
@@ -238,7 +237,7 @@ begin
      vtype := VBYTE;
    end;
    VT_I2: begin
-     methodID := 'getWord';
+     methodID := 'getShort';
      output := '()S';
      vtype := VSHORT;
    end;
@@ -248,15 +247,9 @@ begin
      vtype := VINTEGER;
    end;
    VT_I8: begin
-     // not supported -> string
-     methodID := 'getString';
-     output := '()Ljava/lang/String;';
-     vtype := VSTRING;
-   end;
-   VT_UI1: begin
-     methodID := 'getByte';
-     output := '()B';
-     vtype := VBYTE;
+     methodID := 'getLong';
+     output := '()J';
+     vtype := VLONG;
    end;
    VT_LPSTR: begin
      methodID := 'getString';
@@ -293,26 +286,18 @@ begin
 
   // call method and capture output
   case vtype of
+    VLONG:    Result := JVM.CallLongMethodA(varin, GetMid, nil);
     VINTEGER: Result := JVM.CallIntMethodA(varin, GetMid, nil);
+    VSHORT:   Result := JVM.CallShortMethodA(varin, GetMid, nil);
+    VFLOAT:   Result := JVM.CallFloatMethodA(varin, GetMid, nil);
     VDOUBLE:  Result := JVM.CallDoubleMethodA(varin, GetMid, nil);
     VSTRING:  Result := JVM.JStringToString(JVM.CallObjectMethodA(varin, GetMid, nil));
     VBOOLEAN: Result := JVM.CallBooleanMethodA(varin, GetMid, nil);
     VEMPTY:   Result := VT_EMPTY;
     VNULL:    Result := VT_NULL;
-    VBYTE:    begin
-      vtemp  := JVM.CallByteMethodA(varin, GetMid, nil);
-      Result := VarAsType(vtemp, VT_UI1);
-    end;
+    VBYTE:    Result := JVM.CallByteMethodA(varin, GetMid, nil);
     VVARIANT: begin
       Result := variantUpdate(PEnv, JVM.CallObjectMethodA(varin, GetMid, nil));
-    end;
-    VSHORT: begin
-      vtemp := JVM.CallShortMethodA(varin, GetMid, nil);
-      Result := VarAsType(vtemp, VT_I2);
-    end;
-    VFLOAT: begin
-      vtemp  := JVM.CallFloatMethodA(varin, GetMid, nil);
-      Result := VarAsType(vtemp, VT_R4);
     end;
     VARRAY: begin
       Result := createVariantArray(PEnv, JVM.CallObjectMethodA(varin, GetMid, nil));

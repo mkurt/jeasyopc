@@ -140,6 +140,7 @@ const
 
 // Values for access rights mask
 const
+  OPC_ANY_ACCESS = $00;
   OPC_READABLE  = $01;
   OPC_WRITEABLE = $02;
 

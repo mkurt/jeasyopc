@@ -42,6 +42,15 @@ public class Variant extends VariantTypes implements Cloneable, Comparable, Seri
   public Variant(String value) {
     setString(value);
   }
+
+   /**
+   * Create new instance of Variant
+   * 
+   * @param value Long
+   */
+  public Variant(long value) {
+    setLong(value);
+  }
   
   /**
    * Create new instance of Variant
@@ -103,7 +112,7 @@ public class Variant extends VariantTypes implements Cloneable, Comparable, Seri
    * @param value short
    */
   public Variant(short value) {
-    setWord(value);
+    setShort(value);
   }
 
   /**
@@ -144,27 +153,48 @@ public class Variant extends VariantTypes implements Cloneable, Comparable, Seri
       case VT_BSTR :
       case VT_LPSTR :
       case VT_LPWSTR :  
-      case VT_CY :
-        return (String)value;
-      case VT_INT:
-        return String.valueOf(((Integer)value).intValue());
-      case VT_BOOL:
-        return String.valueOf(((Boolean)value).booleanValue());
-      case VT_R4:
-        return String.valueOf(((Float)value).floatValue());
-      case VT_R8:
-        return String.valueOf(((Double)value).doubleValue());
-      case VT_DATE:
-        return ((Date)value).toString();
-      case VT_ERROR:
-        return "ERROR";
-      case VT_NULL:
-      case VT_EMPTY:
-        return "";
+        return (String) value;
       default :
         throw new VariantTypeException(Translate.getString("VARIANT_TYPE_EXCEPTION"));
     }
   }
+
+   /**
+   * Set value (long)
+   * 
+   * @param value long
+   */
+  private void setLong(long value) {
+    this.value = new Long(value);
+    variant_native = VT_I8;
+  }
+
+    /**
+   * Get value (long)
+   * 
+   * @return value long
+   */
+  public long getLong() {
+    switch (variant_native) {
+      case VT_R8:
+        return ((Double)value).longValue();
+      case VT_R4 :
+        return ((Float)value).longValue();
+      case VT_I8:
+        return ((Long)value).longValue();  
+      case VT_INT :
+        return ((Integer)value).longValue();
+      case VT_I2:
+        return ((Short)value).longValue();
+      case VT_I1 :
+        return ((Byte)value).longValue();
+      case VT_BOOL :
+        return ((Boolean)value).booleanValue() ? 1L : 0L;
+      default :
+        throw new VariantTypeException(Translate.getString("VARIANT_TYPE_EXCEPTION"));
+    }
+  }
+
   
   /**
    * Set value (double)
@@ -183,18 +213,20 @@ public class Variant extends VariantTypes implements Cloneable, Comparable, Seri
    */
   public double getDouble() {
     switch (variant_native) {
-      case VT_R8 :
+      case VT_R8:
         return ((Double)value).doubleValue();
       case VT_R4 :
-        return ((Float)value).floatValue();
+        return ((Float)value).doubleValue();
+      case VT_I8:
+        return ((Long)value).doubleValue();  
       case VT_INT :
-        return ((Integer)value).intValue();
-      case VT_BOOL :
-        return ((Boolean)value).booleanValue() ? 1 : 0;
+        return ((Integer)value).doubleValue();
+      case VT_I2:
+        return ((Short)value).doubleValue();
       case VT_I1 :
-        return ((Byte)value).byteValue();
-      case VT_UI1 :
-        return ((Byte)value).byteValue();
+        return ((Byte)value).doubleValue();
+      case VT_BOOL :
+        return ((Boolean)value).booleanValue() ? 1d : 0d;
       default :
         throw new VariantTypeException(Translate.getString("VARIANT_TYPE_EXCEPTION"));
     }
@@ -217,16 +249,20 @@ public class Variant extends VariantTypes implements Cloneable, Comparable, Seri
    */
   public float getFloat() {
     switch (variant_native) {
+      case VT_R8:
+        return ((Double)value).floatValue();
       case VT_R4 :
         return ((Float)value).floatValue();
+      case VT_I8:
+        return ((Long)value).floatValue();  
       case VT_INT :
-        return ((Integer)value).intValue();
-      case VT_BOOL :
-        return ((Boolean)value).booleanValue() ? 1 : 0;
+        return ((Integer)value).floatValue();
+      case VT_I2:
+        return ((Short)value).floatValue();
       case VT_I1 :
-        return ((Byte)value).byteValue();
-      case VT_UI1 :
-        return ((Byte)value).byteValue();
+        return ((Byte)value).floatValue();
+      case VT_BOOL :
+        return ((Boolean)value).booleanValue() ? 1f : 0f;
       default :
         throw new VariantTypeException(Translate.getString("VARIANT_TYPE_EXCEPTION"));
     }
@@ -249,14 +285,20 @@ public class Variant extends VariantTypes implements Cloneable, Comparable, Seri
    */
   public int getInteger() {
     switch (variant_native) {
+      case VT_R8:
+        return ((Double)value).intValue();
+      case VT_R4 :
+        return ((Float)value).intValue();
+      case VT_I8:
+        return ((Long)value).intValue();  
       case VT_INT :
         return ((Integer)value).intValue();
+      case VT_I2:
+        return ((Short)value).intValue();
+      case VT_I1 :
+        return ((Byte)value).intValue();
       case VT_BOOL :
         return ((Boolean)value).booleanValue() ? 1 : 0;
-      case VT_I1 :
-        return ((Byte)value).byteValue();
-      case VT_UI1 :
-        return ((Byte)value).byteValue();
       default :
         throw new VariantTypeException(Translate.getString("VARIANT_TYPE_EXCEPTION"));
     }
@@ -293,7 +335,7 @@ public class Variant extends VariantTypes implements Cloneable, Comparable, Seri
    */
   private void setByte(byte value) {
     this.value = new Byte(value);
-    variant_native = VT_UI1;
+    variant_native = VT_I1;
   }
   
   /**
@@ -303,8 +345,20 @@ public class Variant extends VariantTypes implements Cloneable, Comparable, Seri
    */
   public byte getByte() {
     switch (variant_native) {
-      case VT_UI1 :
+      case VT_R8:
+        return ((Double)value).byteValue();
+      case VT_R4 :
+        return ((Float)value).byteValue();
+      case VT_I8:
+        return ((Long)value).byteValue();  
+      case VT_INT :
+        return ((Integer)value).byteValue();
+      case VT_I2:
+        return ((Short)value).byteValue();
+      case VT_I1 :
         return ((Byte)value).byteValue();
+      case VT_BOOL :
+        return ((Boolean)value).booleanValue() ? (byte)1 : (byte)0;
       default :
         throw new VariantTypeException(Translate.getString("VARIANT_TYPE_EXCEPTION"));
     }
@@ -315,7 +369,7 @@ public class Variant extends VariantTypes implements Cloneable, Comparable, Seri
    * 
    * @param value short
    */
-  private void setWord(short value) {
+  private void setShort(short value) {
     this.value = new Short(value);
     variant_native = VT_I2;
   }
@@ -325,10 +379,22 @@ public class Variant extends VariantTypes implements Cloneable, Comparable, Seri
    * 
    * @return value short
    */
-  public short getWord() {
+  public short getShort() {
     switch (variant_native) {
-      case VT_I2 :
+      case VT_R8:
+        return ((Double)value).shortValue();
+      case VT_R4 :
+        return ((Float)value).shortValue();
+      case VT_I8:
+        return ((Long)value).shortValue();  
+      case VT_INT :
+        return ((Integer)value).shortValue();
+      case VT_I2:
         return ((Short)value).shortValue();
+      case VT_I1 :
+        return ((Byte)value).shortValue();
+      case VT_BOOL :
+        return ((Boolean)value).booleanValue() ? (short)1 : (short)0;
       default :
         throw new VariantTypeException(Translate.getString("VARIANT_TYPE_EXCEPTION"));
     }
@@ -397,8 +463,9 @@ public class Variant extends VariantTypes implements Cloneable, Comparable, Seri
         setByte(value.getByte());
         return;
       case VT_I2:
-        setWord(value.getWord());
+        setShort(value.getShort());
         return;
+      case VT_I4:
       case VT_INT:
         setInteger(value.getInteger());
         return;
@@ -408,10 +475,10 @@ public class Variant extends VariantTypes implements Cloneable, Comparable, Seri
       case VT_R8:
         setDouble(value.getDouble());
         return;
+      case VT_I8:
+        setLong(value.getLong());  
       case VT_CY:
       case VT_DECIMAL:
-      case VT_I4:
-      case VT_I8:
       case VT_UI1:
       case VT_UI2:
       case VT_UI4:

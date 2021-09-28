@@ -141,6 +141,12 @@ abstract public class JCustomOpc {
   private native void connectServer() throws ConnectivityException;
   
   /**
+   * Disconnect from server
+   *
+   */
+  private native void disconnectServer();
+  
+  /**
    * COM objects initialize (must be call first in program!)
    * 
    * @throws CoInitializeException
@@ -221,6 +227,14 @@ abstract public class JCustomOpc {
       throw new ConnectivityException(Translate.getString("CONNECTIVITY_EXCEPTION") + " " +
           getHost() + "->" + getServerProgID());
     }
+  }
+  
+  /**
+   * Disconnect from OPC Server
+   * 
+   */
+  synchronized public void disconnect() {
+	  disconnectServer();
   }
   
   /**

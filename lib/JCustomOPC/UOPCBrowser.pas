@@ -24,6 +24,8 @@ type
   public
     // connect to server
     procedure connect; override;
+    //disconnect from server
+    procedure disconnect; override;
     // find opc server on host (OPCEnum)
     function findOPCServers(host : string) : TStringList;
     // get branch by its name (list part of the opc tree browser)
@@ -49,6 +51,14 @@ begin
     on E:Exception do
       raise ConnectivityException.Create(ConnectivityExceptionText);
   end;
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TBrowser.disconnect;
+begin
+  inherited disconnect;
+  Browse := nil;
 end;
 
 //------------------------------------------------------------------------------
@@ -108,7 +118,7 @@ begin
       if SpaceType = OPC_NS_HIERARCHIAL
       then begin
         HR := Browse.BrowseOPCItemIDs(OPC_BRANCH, StringToOleStr('*'),
-                                       VT_EMPTY, OPC_READABLE, IES);
+                                       VT_EMPTY, OPC_ANY_ACCESS, IES);
         if Succeeded(HR)
         then begin
           try
@@ -151,9 +161,9 @@ begin
       PVarList^ := TStringList.Create;
       if SpaceType = OPC_NS_HIERARCHIAL
       then HR := Browse.BrowseOPCItemIDs(OPC_LEAF, StringToOleStr('*'),
-                                          VT_EMPTY, OPC_READABLE, IES)
+                                          VT_EMPTY, OPC_ANY_ACCESS, IES)
       else HR := Browse.BrowseOPCItemIDs(OPC_FLAT, StringToOleStr('*'),
-                                          VT_EMPTY, OPC_READABLE, IES);
+                                          VT_EMPTY, OPC_ANY_ACCESS, IES);
       if Succeeded(HR)
       then begin
         while Succeeded(IES.Next(1, Pattern, @Fetched)) and (Fetched = 1) do
@@ -232,34 +242,35 @@ begin
           // read value of item
           try
             HR := ReadOPCGroupItemValue(GroupIf, ItemHandle, ItemValue, ItemQuality, ItemTimeStamp);
-          except
-          end;
-          if Succeeded(HR)
-          then begin
-            if (ItemQuality and OPC_QUALITY_MASK) = OPC_QUALITY_GOOD
+            if Succeeded(HR)
             then begin
-              if not VarIsArray(ItemValue)
-              then val := VarToStr(ItemValue)
-              else begin
-                dimension := VarArrayDimCount(ItemValue);
-                val := '[';
-                for j:=VarArrayLowBound(ItemValue, dimension)
-                    to VarArrayHighBound(ItemValue, dimension) do
-                begin
-                  val := val + VarToStr(ItemValue[j]);
-                  if (j < VarArrayHighBound(ItemValue, dimension))
-                  then val := val + ',';
+              if (ItemQuality and OPC_QUALITY_MASK) = OPC_QUALITY_GOOD
+              then begin
+                if not VarIsArray(ItemValue)
+                then val := VarToStr(ItemValue)
+                else begin
+                  dimension := VarArrayDimCount(ItemValue);
+                  val := '[';
+                  for j:=VarArrayLowBound(ItemValue, dimension)
+                      to VarArrayHighBound(ItemValue, dimension) do
+                  begin
+                    val := val + VarToStr(ItemValue[j]);
+                    if (j < VarArrayHighBound(ItemValue, dimension))
+                    then val := val + ',';
+                  end;
+                  val := val + ']';
                 end;
-                val := val + ']';
-              end;
-            end else val := 'bad quality';
-            VarClear(ItemValue);
-          end
-          else begin
-            Result[i] := Result[i] + '; ' + '---';
+              end else val := 'bad quality';
+              VarClear(ItemValue);
+              // write value to Result
+              Result[i] := Result[i] + '; ' + val;
+            end
+            else begin
+              Result[i] := Result[i] + '; ' + '???';
+            end;
+          except
+            Result[i] := Result[i] + '; ' + '???';
           end;
-          // write value to Result
-          Result[i] := Result[i] + '; ' + val;
         end;
       end;
     end; // download values

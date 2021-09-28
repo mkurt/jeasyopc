@@ -114,12 +114,12 @@ public class VariantTest extends TestCase {
   public void testVariantByte() {
     Variant var = new Variant((byte)1);
     assertEquals((byte)1, var.getByte());
-    assertEquals(Variant.VT_UI1, var.getVariantType());
+    assertEquals(Variant.VT_I1, var.getVariantType());
   }
 
   public void testVariantShort() {
     Variant var = new Variant((short)1);
-    assertEquals((short)1, var.getWord());
+    assertEquals((short)1, var.getShort());
     assertEquals(Variant.VT_I2, var.getVariantType());
   }
 
